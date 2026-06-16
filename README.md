@@ -103,7 +103,24 @@ const extrinsic = signCall(seed, call, {
 });
 ```
 
-`call` is a `0x`-hex string or `Uint8Array` (e.g. `tx.method.toHex()` / `tx.method.toU8a()`). `CallParams` is exactly `TransferParams` without the `recipient`/`amount`/`assetId` fields (`nonce`, `tip?`, `period?`, `blockNumber?`, `genesisHash`, `blockHash?`, `specVersion`, `transactionVersion`).
+The `call` is a `0x`-hex string or `Uint8Array` (e.g. `tx.method.toHex()` / `tx.method.toU8a()`). `CallParams` is the chain context shared by every signed extrinsic — i.e. `TransferParams` minus the call-specific `recipient`/`amount`/`assetId` (in fact `TransferParams extends CallParams`):
+
+```ts
+type Call = Uint8Array | string; // SCALE-encoded RuntimeCall
+
+interface CallParams {
+  nonce: number | bigint;
+  tip?: bigint | string | number; // default 0
+  period?: number | bigint; // mortal era length in blocks; 0/omitted => immortal
+  blockNumber?: number | bigint; // era anchor block (required for mortal eras)
+  genesisHash: string | Uint8Array;
+  blockHash?: string | Uint8Array; // required when period > 0
+  specVersion: number;
+  transactionVersion: number;
+}
+```
+
+The same notes about immortal/mortal eras and hash/amount input formats apply.
 
 ### `accountFromMnemonic(mnemonic: string, opts?: MnemonicOptions): QuantusAccount`
 
