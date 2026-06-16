@@ -1,0 +1,20 @@
+name: Setup toolchain
+description: Install Rust (wasm32), wasm-pack, Node, and npm dependencies.
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-unknown-unknown
+    - uses: Swatinem/rust-cache@v2
+    - name: Install wasm-pack
+      shell: bash
+      run: curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        registry-url: https://registry.npmjs.org
+        cache: npm
+    - name: Install dependencies
+      shell: bash
+      run: npm ci

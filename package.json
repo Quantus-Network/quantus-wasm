@@ -1,0 +1,53 @@
+{
+  "name": "@quantus/wasm",
+  "version": "0.1.0",
+  "description": "Quantus account derivation and ML-DSA-87 extrinsic signing, compiled from the chain's own crypto crates to WebAssembly.",
+  "license": "MIT",
+  "author": "Quantus Network",
+  "homepage": "https://github.com/Quantus-Network/quantus-sdk-js#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Quantus-Network/quantus-sdk-js.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Quantus-Network/quantus-sdk-js/issues"
+  },
+  "keywords": [
+    "quantus",
+    "substrate",
+    "ml-dsa-87",
+    "dilithium",
+    "post-quantum",
+    "poseidon",
+    "wasm",
+    "signing"
+  ],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/",
+    "pkg/quantus_wasm_bg.wasm",
+    "pkg/quantus_wasm.js",
+    "pkg/quantus_wasm.d.ts"
+  ],
+  "scripts": {
+    "build:wasm": "wasm-pack build --release --target nodejs --out-dir pkg",
+    "build:ts": "tsc",
+    "build": "npm run build:wasm && npm run build:ts",
+    "test:rust": "cargo test",
+    "test:js": "node --test",
+    "test": "npm run test:rust && npm run build && npm run test:js",
+    "example": "node examples/usage.js",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5.4"
+  }
+}
