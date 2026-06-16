@@ -69,17 +69,10 @@ pub(crate) fn account_from_keys(keys: ext::AccountKeys) -> Account {
     }
 }
 
-/// Transfer parameters as received from JS (snake/camel-case fields).
+/// Chain signing context as received from JS (camelCase fields).
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct JsTransferParams {
-    /// SS58 (prefix 189) or `0x`-hex 32-byte recipient `AccountId32`.
-    recipient: String,
-    /// Amount in plancks as a decimal string (u128).
-    amount: String,
-    /// Optional asset id; when present an `assets.transfer` is built.
-    #[serde(default)]
-    asset_id: Option<u32>,
+struct JsSignContext {
     nonce: u64,
     /// Tip in plancks as a decimal string (u128); defaults to "0".
     #[serde(default)]
@@ -99,11 +92,34 @@ struct JsTransferParams {
     transaction_version: u32,
 }
 
+/// Transfer parameters: call-specific fields plus the shared signing context.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsTransferParams {
+    /// SS58 (prefix 189) or `0x`-hex 32-byte recipient `AccountId32`.
+    recipient: String,
+    /// Amount in plancks as a decimal string (u128).
+    amount: String,
+    /// Optional asset id; when present an `assets.transfer` is built.
+    #[serde(default)]
+    asset_id: Option<u32>,
+    #[serde(flatten)]
+    ctx: JsSignContext,
+}
+
 /// Sign a balances/assets transfer, returning the SCALE-encoded v4 extrinsic.
 #[wasm_bindgen(js_name = signTransfer)]
 pub fn sign_transfer(seed: &[u8], params: JsValue) -> Result<Vec<u8>, JsError> {
     let params = build_transfer_params(params)?;
     ext::sign_transfer(seed, &params).map_err(to_js_error)
+}
+
+/// Sign an already-encoded `RuntimeCall` (e.g. polkadot.js `tx.method.toU8a()`),
+/// returning the SCALE-encoded v4 extrinsic.
+#[wasm_bindgen(js_name = signCall)]
+pub fn sign_call(seed: &[u8], call: &[u8], context: JsValue) -> Result<Vec<u8>, JsError> {
+    let ctx = build_sign_context_from_value(context)?;
+    ext::sign_call(seed, call, &ctx).map_err(to_js_error)
 }
 
 pub(crate) fn build_transfer_params(params: JsValue) -> Result<ext::TransferParams, JsError> {
@@ -114,20 +130,32 @@ pub(crate) fn build_transfer_params(params: JsValue) -> Result<ext::TransferPara
         recipient: parse_account_id(&p.recipient)?,
         amount: parse_u128(&p.amount, "amount")?,
         asset_id: p.asset_id,
-        nonce: p.nonce,
-        tip: match p.tip {
+        ctx: build_sign_context(&p.ctx)?,
+    })
+}
+
+pub(crate) fn build_sign_context_from_value(context: JsValue) -> Result<ext::SignContext, JsError> {
+    let c: JsSignContext = serde_wasm_bindgen::from_value(context)
+        .map_err(|e| JsError::new(&alloc::format!("invalid params: {e}")))?;
+    build_sign_context(&c)
+}
+
+fn build_sign_context(c: &JsSignContext) -> Result<ext::SignContext, JsError> {
+    Ok(ext::SignContext {
+        nonce: c.nonce,
+        tip: match c.tip {
             Some(ref s) => parse_u128(s, "tip")?,
             None => 0,
         },
-        period: p.period,
-        block_number: p.block_number,
-        genesis_hash: parse_h256(&p.genesis_hash, "genesisHash")?,
-        block_hash: match p.block_hash {
+        period: c.period,
+        block_number: c.block_number,
+        genesis_hash: parse_h256(&c.genesis_hash, "genesisHash")?,
+        block_hash: match c.block_hash {
             Some(ref s) => parse_h256(s, "blockHash")?,
             None => [0u8; 32],
         },
-        spec_version: p.spec_version,
-        transaction_version: p.transaction_version,
+        spec_version: c.spec_version,
+        transaction_version: c.transaction_version,
     })
 }
 

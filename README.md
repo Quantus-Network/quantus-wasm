@@ -6,6 +6,7 @@ This package is **compiled to WebAssembly from the Quantus chain's own crypto cr
 
 - `account(seed)` → ML-DSA-87 keypair → Poseidon `AccountId32` → SS58 address (prefix `189`).
 - `signTransfer(seed, params)` → a signed **v4 extrinsic**, ready for `author_submitExtrinsic`.
+- `signCall(seed, call, params)` → sign **any** call (build it with polkadot.js, sign it here).
 - BIP39 mnemonic helpers using the canonical Quantus HD path.
 
 ## Install
@@ -83,6 +84,27 @@ Notes:
 - **Mortal eras** require `period`, `blockNumber`, and `blockHash`, where `blockHash` is the hash of `blockNumber` and `blockNumber` is an era boundary for the period.
 - Hashes accept either `0x`-hex strings or raw `Uint8Array`. Amounts accept `bigint` (recommended), decimal strings, or safe integers.
 
+### `signCall(seed: Uint8Array, call: Call, params: CallParams): Uint8Array`
+
+Signs an **already-encoded `RuntimeCall`**, returning the SCALE-encoded v4 extrinsic. This is the generic primitive behind `signTransfer`: build any call with polkadot.js (whose codec handles the call fine — only the 7219-byte Dilithium *signature* exceeds its limits), then sign it here.
+
+```ts
+import { ApiPromise } from "@polkadot/api";
+import { signCall } from "@quantus/wasm";
+
+const api = await ApiPromise.create({ provider });
+const call = api.tx.balances.transferAllowDeath(dest, value).method.toHex();
+
+const extrinsic = signCall(seed, call, {
+  nonce: 0,
+  genesisHash: api.genesisHash.toHex(),
+  specVersion: api.runtimeVersion.specVersion.toNumber(),
+  transactionVersion: api.runtimeVersion.transactionVersion.toNumber(),
+});
+```
+
+`call` is a `0x`-hex string or `Uint8Array` (e.g. `tx.method.toHex()` / `tx.method.toU8a()`). `CallParams` is exactly `TransferParams` without the `recipient`/`amount`/`assetId` fields (`nonce`, `tip?`, `period?`, `blockNumber?`, `genesisHash`, `blockHash?`, `specVersion`, `transactionVersion`).
+
 ### `accountFromMnemonic(mnemonic: string, opts?: MnemonicOptions): QuantusAccount`
 
 Derives an account from a BIP39 mnemonic using the Quantus HD path `m/44'/189189'/<account>'/<change>'/<addressIndex>'`. Produces the same addresses as the Quantus wallets.
@@ -99,6 +121,10 @@ interface MnemonicOptions {
 ### `signTransferFromMnemonic(mnemonic, params, opts?): Uint8Array`
 
 Same as `signTransfer`, but keyed from a mnemonic at the given HD indices.
+
+### `signCallFromMnemonic(mnemonic, call, params, opts?): Uint8Array`
+
+Same as `signCall`, but keyed from a mnemonic at the given HD indices.
 
 ### `mnemonicToSeed(mnemonic: string, passphrase?: string): Uint8Array`
 

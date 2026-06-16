@@ -12,6 +12,7 @@
 const {
   account,
   signTransfer,
+  signCall,
   accountFromMnemonic,
   signTransferFromMnemonic,
   mnemonicToSeed,
@@ -85,6 +86,20 @@ const mortalXt = signTransfer(seed, {
   ...ctx,
 });
 console.log("extrinsic:", preview(mortalXt, 6));
+
+console.log("\n== signCall(seed, call, ctx) — sign an arbitrary pre-encoded call ==");
+// Build the call however you like; polkadot.js is the easy path (it can encode
+// calls fine — only the signed extrinsic exceeds its 2048-element array cap):
+//   const call = api.tx.balances.transferAllowDeath(dest, 1000).method.toHex();
+// Inlined here: balances.transfer_allow_death(hd0, 1000) =
+//   pallet 2, call 0, MultiAddress::Id (0x00) + 32-byte account + compact(1000)=0xa10f
+const call = "0x020000" + Buffer.from(hd0.accountId).toString("hex") + "a10f";
+const callXt = signCall(seed, call, { nonce: 0, ...ctx });
+console.log("call      :", call.slice(0, 12) + "…", `(${(call.length - 2) / 2} bytes)`);
+console.log("extrinsic :", preview(callXt, 6));
+// signCall is the generic primitive behind signTransfer — same bytes out:
+const equivXt = signTransfer(seed, { recipient: hd0.address, amount: 1000n, nonce: 0, ...ctx });
+console.log("== signTransfer:", Buffer.from(callXt).equals(Buffer.from(equivXt)));
 
 console.log("\n== signTransferFromMnemonic(mnemonic, params, { account }) ==");
 const fromMnemonicXt = signTransferFromMnemonic(

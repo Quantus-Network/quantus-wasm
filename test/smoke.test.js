@@ -4,6 +4,7 @@ const { createHash } = require("node:crypto");
 const {
   account,
   signTransfer,
+  signCall,
   accountFromMnemonic,
   signTransferFromMnemonic,
   mnemonicToSeed,
@@ -83,6 +84,29 @@ test("signTransfer accepts bigint/string amounts and assetId", () => {
   const cp = asset[0] & 0b11 ? 2 : 1;
   // assets pallet (17) + transfer (8) appear after version+address+signature.
   assert.notDeepEqual(asset, a);
+});
+
+test("signCall matches signTransfer for the equivalent encoded call", () => {
+  // balances.transfer_allow_death(MultiAddress::Id(crystal_alice), 1000):
+  // pallet 2, call 0, 0x00 (Id), 32-byte account, compact(1000)=0xa10f.
+  // Mirrors what polkadot.js `tx.method.toHex()` would produce for this call.
+  const call = "0x020000" + CRYSTAL_ALICE_ACCOUNT_ID + "a10f";
+  const ctx = {
+    nonce: 0,
+    genesisHash: "0x" + "11".repeat(32),
+    specVersion: 1,
+    transactionVersion: 1,
+  };
+  const viaCall = signCall(CRYSTAL_ALICE_SEED, call, ctx);
+  const viaTransfer = signTransfer(CRYSTAL_ALICE_SEED, {
+    recipient: CRYSTAL_ALICE_ADDRESS,
+    amount: 1000n,
+    ...ctx,
+  });
+  assert.deepEqual(viaCall, viaTransfer);
+  // Accepts Uint8Array calls too (e.g. polkadot.js `tx.method.toU8a()`).
+  const callBytes = Uint8Array.from(Buffer.from(call.slice(2), "hex"));
+  assert.deepEqual(signCall(CRYSTAL_ALICE_SEED, callBytes, ctx), viaTransfer);
 });
 
 // Known chain-spec vectors (quantus_sdk/test/generate_keys_test.dart).
