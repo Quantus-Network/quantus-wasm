@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "WASM bindings for Quantus account derivation and ML-DSA-87 extrinsic signing"
 license = "MIT"
-repository = "https://github.com/Quantus-Network/quantus-sdk-js"
+repository = "https://github.com/Quantus-Network/quantus-wasm"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

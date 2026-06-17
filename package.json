@@ -4,13 +4,13 @@
   "description": "Quantus account derivation and ML-DSA-87 extrinsic signing, compiled from the chain's own crypto crates to WebAssembly.",
   "license": "MIT",
   "author": "Quantus Network",
-  "homepage": "https://github.com/Quantus-Network/quantus-sdk-js#readme",
+  "homepage": "https://github.com/Quantus-Network/quantus-wasm#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Quantus-Network/quantus-sdk-js.git"
+    "url": "git+https://github.com/Quantus-Network/quantus-wasm.git"
   },
   "bugs": {
-    "url": "https://github.com/Quantus-Network/quantus-sdk-js/issues"
+    "url": "https://github.com/Quantus-Network/quantus-wasm/issues"
   },
   "keywords": [
     "quantus",
