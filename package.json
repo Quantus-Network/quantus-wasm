@@ -38,7 +38,9 @@
     "test:js": "node --test",
     "test": "npm run test:rust && npm run build && npm run test:js",
     "example": "node examples/usage.js",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "version": "node scripts/sync-cargo-version.mjs && git add Cargo.toml Cargo.lock",
+    "postversion": "git push --follow-tags && gh release create v$npm_package_version --generate-notes --verify-tag"
   },
   "engines": {
     "node": ">=18"
