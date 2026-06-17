@@ -1,5 +1,5 @@
 {
-  "name": "@quantus/wasm",
+  "name": "@quantus-network/wasm",
   "version": "0.1.0",
   "description": "Quantus account derivation and ML-DSA-87 extrinsic signing, compiled from the chain's own crypto crates to WebAssembly.",
   "license": "MIT",

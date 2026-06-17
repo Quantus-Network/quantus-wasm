@@ -1,4 +1,4 @@
-# @quantus/wasm
+# @quantus-network/wasm
 
 Quantus account derivation and **ML-DSA-87** transaction signing for JavaScript/TypeScript.
 
@@ -12,7 +12,7 @@ This package is **compiled to WebAssembly from the Quantus chain's own crypto cr
 ## Install
 
 ```bash
-npm install @quantus/wasm
+npm install @quantus-network/wasm
 ```
 
 Requires Node.js >= 18. The package ships prebuilt wasm (nodejs target) plus TypeScript types.
@@ -20,7 +20,7 @@ Requires Node.js >= 18. The package ships prebuilt wasm (nodejs target) plus Typ
 ## Quick start
 
 ```ts
-import { account, signTransfer } from "@quantus/wasm";
+import { account, signTransfer } from "@quantus-network/wasm";
 
 // 32-byte seed (e.g. from your KMS / secure storage).
 const seed = new Uint8Array(32); // ...fill with real entropy
@@ -90,7 +90,7 @@ Signs an **already-encoded `RuntimeCall`**, returning the SCALE-encoded v4 extri
 
 ```ts
 import { ApiPromise } from "@polkadot/api";
-import { signCall } from "@quantus/wasm";
+import { signCall } from "@quantus-network/wasm";
 
 const api = await ApiPromise.create({ provider });
 const call = api.tx.balances.transferAllowDeath(dest, value).method.toHex();

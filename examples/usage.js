@@ -1,4 +1,4 @@
-// Runnable example exercising every documented @quantus/wasm function.
+// Runnable example exercising every documented @quantus-network/wasm function.
 //
 //   npm run build && npm run example
 //
