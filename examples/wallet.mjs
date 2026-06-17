@@ -43,7 +43,13 @@ function formatAmount(planck, decimals, symbol) {
 }
 
 async function connect(rpcUrl) {
-  return ApiPromise.create({ provider: new HttpProvider(rpcUrl), noInitWarn: true });
+  return ApiPromise.create({
+    provider: new HttpProvider(rpcUrl),
+    noInitWarn: true,
+    // U512 (512-bit unsigned int) is referenced by the runtime metadata but not
+    // a polkadot.js primitive; register it so it stops warning on decode.
+    types: { U512: "[u8; 64]" },
+  });
 }
 
 async function submit(rpcUrl, hex) {
