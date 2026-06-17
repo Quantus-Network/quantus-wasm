@@ -17,6 +17,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
+      - name: Verify version matches release tag
+        if: github.event_name == 'release'
+        run: |
+          tag="${{ github.event.release.tag_name }}"
+          pkg="v$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::Release tag $tag does not match package.json version $pkg"
+            exit 1
+          fi
       - name: Build and test
         run: npm test
       - name: Publish
