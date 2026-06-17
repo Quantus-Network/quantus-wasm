@@ -86,14 +86,21 @@ Notes:
 
 ### `signCall(seed: Uint8Array, call: Call, params: CallParams): Uint8Array`
 
-Signs an **already-encoded `RuntimeCall`**, returning the SCALE-encoded v4 extrinsic. This is the generic primitive behind `signTransfer`: build any call with polkadot.js (whose codec handles the call fine — only the 7219-byte Dilithium *signature* exceeds its limits), then sign it here.
+Signs an **already-encoded `RuntimeCall`**, returning the SCALE-encoded v4 extrinsic. This is the generic primitive behind `signTransfer`: encode the call with polkadot.js (whose codec handles the call fine — only the 7219-byte Dilithium *signature* exceeds its limits), then sign it here.
+
+Encode the **call** directly via the registry — do **not** build a `SubmittableExtrinsic` (e.g. `api.tx.balances.transferAllowDeath(...)`), as that forces polkadot.js to instantiate the oversized signature type and throws:
 
 ```ts
 import { ApiPromise } from "@polkadot/api";
 import { signCall } from "@quantus-network/wasm";
 
 const api = await ApiPromise.create({ provider });
-const call = api.tx.balances.transferAllowDeath(dest, value).method.toHex();
+const call = api.registry
+  .createType("Call", {
+    callIndex: api.tx.balances.transferAllowDeath.callIndex,
+    args: { dest, value },
+  })
+  .toHex();
 
 const extrinsic = signCall(seed, call, {
   nonce: 0,
@@ -101,9 +108,12 @@ const extrinsic = signCall(seed, call, {
   specVersion: api.runtimeVersion.specVersion.toNumber(),
   transactionVersion: api.runtimeVersion.transactionVersion.toNumber(),
 });
+
+// Submit via raw JSON-RPC; the signed extrinsic is too large for api.rpc to re-decode:
+// await rpc("author_submitExtrinsic", ["0x" + Buffer.from(extrinsic).toString("hex")]);
 ```
 
-The `call` is a `0x`-hex string or `Uint8Array` (e.g. `tx.method.toHex()` / `tx.method.toU8a()`). `CallParams` is the chain context shared by every signed extrinsic — i.e. `TransferParams` minus the call-specific `recipient`/`amount`/`assetId` (in fact `TransferParams extends CallParams`):
+The `call` is a `0x`-hex string or `Uint8Array`. `CallParams` is the chain context shared by every signed extrinsic — i.e. `TransferParams` minus the call-specific `recipient`/`amount`/`assetId` (in fact `TransferParams extends CallParams`):
 
 ```ts
 type Call = Uint8Array | string; // SCALE-encoded RuntimeCall
@@ -156,9 +166,9 @@ Correctness is validated byte-for-byte against the canonical chain crates and fr
 - **Signatures** are deterministic ML-DSA-87, frozen as golden vectors and verified under the canonical crate.
 - **Transaction extensions** match the runtime's `TxExtension` (CheckMortality, CheckNonce, ChargeTransactionPayment, CheckMetadataHash, and the custom Reversible/Wormhole extensions, which contribute no signed bytes).
 
-## Example
+## Examples
 
-A runnable script exercising every documented function:
+A runnable script exercising every documented function (offline):
 
 ```bash
 npm run build
@@ -166,6 +176,27 @@ npm run example
 ```
 
 See [`examples/usage.js`](examples/usage.js).
+
+### CLI wallet
+
+[`examples/wallet.mjs`](examples/wallet.mjs) is a minimal command-line wallet
+that talks to a live node. It uses polkadot.js only for connecting, reading
+storage (balance/nonce), and SCALE-encoding the call; this package produces the
+post-quantum signature, and the signed extrinsic is submitted via raw
+`author_submitExtrinsic` (it is too large for polkadot.js to re-decode).
+
+```bash
+export MNEMONIC="your twelve or twenty-four word phrase"
+
+npm run wallet -- address
+npm run wallet -- balance                 # balance of your own account
+npm run wallet -- balance <address>       # balance of any address
+npm run wallet -- send --to <address> --amount 1000000000000
+```
+
+The endpoint defaults to `https://a1-planck.quantus.cat`; override it with
+`--rpc <url>` or the `QUANTUS_RPC` env var. Pass `--account N` to use a
+different HD account index.
 
 ## Build from source
 
@@ -179,7 +210,7 @@ npm test        # cargo test + JS golden vectors
 
 ## Publishing
 
-Published from CI. Tag a GitHub Release (e.g. `v0.1.0`) and the `publish` workflow builds, tests, and runs `npm publish --provenance`. A repo secret `NPM_TOKEN` (npm automation token for the `@quantus` org) is required.
+Published from CI via npm [Trusted Publishing](https://docs.npmjs.com/trusted-publishers) (OIDC) — no token or secret required. Cut a release with `scripts/create-release.sh <patch|minor|major|x.y.z>` (see [`CREATE_RELEASE.md`](CREATE_RELEASE.md)); publishing a GitHub Release triggers the `publish` workflow, which builds, tests, and runs `npm publish` with automatic provenance.
 
 ## License
 
