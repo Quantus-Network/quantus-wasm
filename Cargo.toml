@@ -1,6 +1,6 @@
 [package]
 name = "quantus-wasm"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "WASM bindings for Quantus account derivation and ML-DSA-87 extrinsic signing"
 license = "MIT"
