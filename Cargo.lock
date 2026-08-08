@@ -1962,7 +1962,7 @@ checksum = "f99d71b1b1ba2c8ecc882e76cf5b300d7e411238d749f34429b4af82aeda3b9c"
 dependencies = [
  "log",
  "parity-scale-codec",
- "qp-poseidon-core",
+ "qp-poseidon-core 2.1.0",
  "qp-rusty-crystals-dilithium",
  "qp-rusty-crystals-hdwallet",
  "scale-info",
@@ -1976,6 +1976,12 @@ name = "qp-poseidon-core"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78172860cd960773c72e97fba07ead9e5a1c13086c5746283744933e2e4a577b"
+
+[[package]]
+name = "qp-poseidon-core"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5872607e25ea4ee5fb37e64bf1462168e1a36a4e719cdc8a105533c708253918"
 
 [[package]]
 name = "qp-rusty-crystals-dilithium"
@@ -1997,7 +2003,7 @@ dependencies = [
  "hex",
  "hex-literal",
  "hmac",
- "qp-poseidon-core",
+ "qp-poseidon-core 2.1.0",
  "qp-rusty-crystals-dilithium",
  "serde",
  "serde_json",
@@ -2014,7 +2020,7 @@ dependencies = [
  "hex",
  "parity-scale-codec",
  "qp-dilithium-crypto",
- "qp-poseidon-core",
+ "qp-poseidon-core 3.1.0",
  "qp-rusty-crystals-dilithium",
  "qp-rusty-crystals-hdwallet",
  "serde",
