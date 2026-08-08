@@ -12,9 +12,12 @@ runs:
       run: curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
     - uses: actions/setup-node@v4
       with:
-        node-version: 20
+        node-version: 24
         registry-url: https://registry.npmjs.org
         cache: npm
+    - name: Upgrade npm
+      shell: bash
+      run: npm install -g npm@latest
     - name: Install dependencies
       shell: bash
       run: npm ci
