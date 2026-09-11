@@ -9,7 +9,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use qp_rusty_crystals_dilithium::ml_dsa_87;
-use qp_rusty_crystals_hdwallet::{derive_key_from_mnemonic, mnemonic_to_seed};
+use qp_rusty_crystals_hdwallet::{derive_key_from_mnemonic, mnemonic_to_seed, SensitiveBytes64};
 use wasm_bindgen::prelude::*;
 
 use crate::{ext, Account};
@@ -77,7 +77,8 @@ pub fn sign_call_from_mnemonic(
 /// BIP39 mnemonic -> 64-byte seed (bridge to the seed-based API).
 #[wasm_bindgen(js_name = mnemonicToSeed)]
 pub fn mnemonic_to_seed_js(mnemonic: String, passphrase: Option<String>) -> Result<Vec<u8>, JsError> {
-    mnemonic_to_seed(mnemonic, passphrase.as_deref())
-        .map(|seed| seed.to_vec())
-        .map_err(|e| JsError::new(&alloc::format!("mnemonic_to_seed failed: {e}")))
+    let mut seed = SensitiveBytes64::zeroed();
+    mnemonic_to_seed(mnemonic, passphrase.as_deref(), &mut seed)
+        .map_err(|e| JsError::new(&alloc::format!("mnemonic_to_seed failed: {e}")))?;
+    Ok(seed.as_mut_bytes().to_vec())
 }

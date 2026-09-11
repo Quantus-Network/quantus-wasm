@@ -163,7 +163,7 @@ Correctness is validated byte-for-byte against the canonical chain crates and fr
 
 - **Addresses** match `qp-dilithium-crypto`'s `IdentifyAccount`, and reproduce known chain-spec mnemonic vectors.
 - **`Era`** encoding matches `sp-runtime::generic::Era`.
-- **Signatures** are deterministic ML-DSA-87, frozen as golden vectors and verified under the canonical crate.
+- **Signatures** are deterministic ML-DSA-87 bound to the FIPS 204 context `QUANTUS_EXTRINSIC` (the runtime's `signing_context::EXTRINSIC`). They are frozen as golden vectors, compared byte-for-byte against `sp_core::Pair::sign` from `qp-dilithium-crypto`, and verified through the runtime's `Verify` impl. A signature under any other context (including none) is rejected on chain.
 - **Transaction extensions** match the runtime's `TxExtension` (CheckMortality, CheckNonce, ChargeTransactionPayment, CheckMetadataHash, and the custom Reversible/Wormhole extensions, which contribute no signed bytes).
 
 ## Examples

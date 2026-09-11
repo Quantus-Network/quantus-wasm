@@ -65,7 +65,7 @@ test("signTransfer is deterministic (frozen golden extrinsic)", () => {
   });
   assert.equal(xt.length, 7297);
   const digest = createHash("sha256").update(Buffer.from(xt)).digest("hex");
-  assert.equal(digest, "654900132d40bae9ebf3e2fe66ac8a194b2ea3b86956a6c9f78d443cec14479e");
+  assert.equal(digest, "735cf187afea82dcd6c7ac255311d325a8c2c8005cb7ceef837f1ac70ebf8d07");
 });
 
 test("signTransfer accepts bigint/string amounts and assetId", () => {
