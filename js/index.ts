@@ -210,12 +210,13 @@ export function signTransferFromMnemonic(
   params: TransferParams,
   opts: MnemonicOptions = {}
 ): Uint8Array {
+  const scheme = opts.scheme ?? params.scheme;
   return wasm.signTransferFromMnemonic(
     mnemonic,
-    encodeTransfer(params, opts.scheme),
+    encodeTransfer(params, scheme),
     opts.account ?? 0,
     opts.change ?? 0,
-    opts.addressIndex ?? defaultAddressIndex(opts.scheme),
+    opts.addressIndex ?? defaultAddressIndex(scheme),
     opts.passphrase
   );
 }
@@ -239,13 +240,14 @@ export function signCallFromMnemonic(
   params: CallParams,
   opts: MnemonicOptions = {}
 ): Uint8Array {
+  const scheme = opts.scheme ?? params.scheme;
   return wasm.signCallFromMnemonic(
     mnemonic,
     toBytes(call, "call"),
-    encodeContext(params, opts.scheme),
+    encodeContext(params, scheme),
     opts.account ?? 0,
     opts.change ?? 0,
-    opts.addressIndex ?? defaultAddressIndex(opts.scheme),
+    opts.addressIndex ?? defaultAddressIndex(scheme),
     opts.passphrase
   );
 }

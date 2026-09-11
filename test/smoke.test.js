@@ -7,6 +7,7 @@ const {
   signCall,
   accountFromMnemonic,
   signTransferFromMnemonic,
+  signCallFromMnemonic,
   mnemonicToSeed,
 } = require("../dist/index.js");
 
@@ -241,4 +242,24 @@ test("signTransferFromMnemonic with ML-DSA-65 signs with the derived key", () =>
   );
   assert.equal(xt[2 + 1 + 33], 0x01);
   assert.deepEqual(xt.subarray(4, 36), accountFromMnemonic(MNEMONIC, { scheme: ML_DSA_65 }).accountId);
+});
+
+test("mnemonic signing takes the ML-DSA-65 default index from params.scheme too", () => {
+  const params = {
+    recipient: CRYSTAL_ALICE_ADDRESS,
+    amount: 500n,
+    nonce: 3,
+    genesisHash: "0x" + "11".repeat(32),
+    specVersion: 100,
+    transactionVersion: 1,
+    scheme: ML_DSA_65,
+  };
+  const expected = accountFromMnemonic(MNEMONIC, { scheme: ML_DSA_65 }).accountId;
+  const xt = signTransferFromMnemonic(MNEMONIC, params);
+  assert.equal(xt[2 + 1 + 33], 0x01);
+  assert.deepEqual(xt.subarray(4, 36), expected);
+  const call = "0x020000" + "02".repeat(32) + "a10f";
+  const xtCall = signCallFromMnemonic(MNEMONIC, call, params);
+  assert.equal(xtCall[2 + 1 + 33], 0x01);
+  assert.deepEqual(xtCall.subarray(4, 36), expected);
 });
