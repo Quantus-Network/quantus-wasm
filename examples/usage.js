@@ -110,4 +110,13 @@ const fromMnemonicXt = signTransferFromMnemonic(
 console.log("signer    :", hd0.address);
 console.log("extrinsic :", preview(fromMnemonicXt, 6));
 
+// Every function accepts `scheme`; omit it for ML-DSA-87 (the default).
+console.log("\n== scheme: \"ml-dsa-65\" ==");
+const acct65 = account(seed, { scheme: "ml-dsa-65" });
+console.log("address   :", acct65.address, `(${acct65.scheme}, pk ${acct65.publicKey.length} bytes)`);
+const hd65 = accountFromMnemonic(mnemonic, { scheme: "ml-dsa-65" }); // addressIndex defaults to 1
+console.log("hd address:", hd65.address);
+const xt65 = signTransfer(seed, { scheme: "ml-dsa-65", recipient: hd65.address, amount: 1000n, nonce: 0, ...ctx });
+console.log("extrinsic :", preview(xt65, 6));
+
 console.log("\nAll documented functions invoked successfully.");

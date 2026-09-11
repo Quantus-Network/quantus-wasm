@@ -1,7 +1,7 @@
 {
   "name": "@quantus-network/wasm",
   "version": "0.3.1",
-  "description": "Quantus account derivation and ML-DSA-87 extrinsic signing, compiled from the chain's own crypto crates to WebAssembly.",
+  "description": "Quantus account derivation and ML-DSA-87/ML-DSA-65 extrinsic signing, compiled from the chain's own crypto crates to WebAssembly.",
   "license": "MIT",
   "author": "Quantus Network",
   "homepage": "https://github.com/Quantus-Network/quantus-wasm#readme",
