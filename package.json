@@ -31,8 +31,8 @@
     "pkg/quantus_wasm.d.ts"
   ],
   "scripts": {
-    "build:wasm": "wasm-pack build --release --target nodejs --out-dir pkg",
-    "build:ts": "tsc",
+    "build:wasm": "wasm-pack build --release --target nodejs --out-dir pkg && rm -f pkg/.gitignore",
+    "build:ts": "rm -rf dist && tsc",
     "build": "npm run build:wasm && npm run build:ts",
     "test:rust": "cargo test",
     "test:js": "node --test",
