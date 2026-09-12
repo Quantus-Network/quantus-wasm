@@ -1,0 +1,40 @@
+{
+  "name": "@quantus-network/wormhole-linux-x64-gnu",
+  "version": "0.0.0",
+  "cpu": [
+    "x64"
+  ],
+  "main": "wormhole.linux-x64-gnu.node",
+  "files": [
+    "wormhole.linux-x64-gnu.node"
+  ],
+  "description": "Quantus wormhole for Node.js: deposit keys, proving for all three layers on every core, verification, and settlement extrinsics. Native addon built from the chain's own circuit crates.",
+  "keywords": [
+    "quantus",
+    "wormhole",
+    "zero-knowledge",
+    "plonky2",
+    "post-quantum",
+    "napi-rs"
+  ],
+  "author": "Quantus Network",
+  "homepage": "https://github.com/Quantus-Network/quantus-wasm/tree/main/wormhole/native#readme",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Quantus-Network/quantus-wasm.git",
+    "directory": "wormhole/native"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "os": [
+    "linux"
+  ],
+  "libc": [
+    "glibc"
+  ]
+}

@@ -1,0 +1,40 @@
+[package]
+name = "quantus-wormhole-core"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "Quantus wormhole: deposit keys, proving, verification and settlement encoding"
+
+[dependencies]
+# Circuit crates pinned to the exact versions the Quantus runtime embeds as
+# verifiers, so proofs made here settle on chain.
+qp-plonky2 = { version = "=1.5.5", default-features = false, features = ["std", "parallel", "rand"] }
+qp-plonky2-verifier = { version = "=1.5.5", default-features = false, features = ["std"] }
+qp-wormhole-prover = { version = "=4.3.0", default-features = false, features = ["std"] }
+qp-wormhole-aggregator = { version = "=4.3.0", default-features = false, features = ["std", "multithread"] }
+qp-wormhole-verifier = { version = "=4.3.0", default-features = false, features = ["std"] }
+qp-wormhole-circuit = { version = "=4.3.0", default-features = false, features = ["std"] }
+qp-wormhole-inputs = { version = "=4.3.0", default-features = false, features = ["std"] }
+qp-zk-circuits-common = { version = "=4.3.0", default-features = false, features = ["std"] }
+qp-rusty-crystals-hdwallet = "4.1.1"
+
+parity-scale-codec = { version = "3.7", default-features = false, features = ["derive"] }
+sp-core = { version = "39.0.0", default-features = false, features = ["serde"] }
+hex = "0.4"
+rayon = "1"
+
+# Generates the verifier artifacts embedded at compile time (same generator and
+# sizing the runtime uses).
+[build-dependencies]
+qp-wormhole-circuit-builder = "=4.3.0"
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+default = []
+# Layer-2 proving. Adds the dummy private-batch padding proof to the build
+# (proves one private batch at build time) and `prove::aggregate_public_batch`.
+public-batch = []

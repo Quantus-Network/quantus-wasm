@@ -1,0 +1,55 @@
+{
+  "name": "@quantus-network/wormhole",
+  "version": "0.0.0",
+  "description": "Quantus wormhole for Node.js: deposit keys, proving for all three layers on every core, verification, and settlement extrinsics. Native addon built from the chain's own circuit crates.",
+  "license": "MIT",
+  "author": "Quantus Network",
+  "homepage": "https://github.com/Quantus-Network/quantus-wasm/tree/main/wormhole/native#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Quantus-Network/quantus-wasm.git",
+    "directory": "wormhole/native"
+  },
+  "keywords": [
+    "quantus",
+    "wormhole",
+    "zero-knowledge",
+    "plonky2",
+    "post-quantum",
+    "napi-rs"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "types": "./dist/index.d.mts",
+  "files": [
+    "dist/",
+    "binding.js",
+    "binding.d.ts"
+  ],
+  "napi": {
+    "binaryName": "wormhole",
+    "targets": [
+      "aarch64-apple-darwin",
+      "x86_64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl"
+    ]
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build:rust": "napi build --platform --release --js binding.js --dts binding.d.ts",
+    "build:ts": "tsc -p tsconfig.json",
+    "build": "npm run build:rust && npm run build:ts"
+  }
+}
