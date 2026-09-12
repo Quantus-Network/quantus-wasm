@@ -2,7 +2,7 @@
 //!
 //! Cryptography is delegated to the exact crates the runtime uses
 //! (`qp-poseidon-core` for addresses, `qp-rusty-crystals-dilithium` for
-//! ML-DSA-87). The SCALE envelope (era, address tag, signature tag, extrinsic
+//! ML-DSA-87 and ML-DSA-65). The SCALE envelope (era, address tag, signature tag, extrinsic
 //! framing) mirrors the runtime's `UncheckedExtrinsic`/`TxExtension`; every byte
 //! is validated against `sp-runtime`/`qp-dilithium-crypto` in the tests below.
 
@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 
 use parity_scale_codec::{Compact, Encode};
 use qp_poseidon_core::hash_bytes;
-use qp_rusty_crystals_dilithium::{ml_dsa_87, SensitiveBytes32};
+use qp_rusty_crystals_dilithium::{ml_dsa_65, ml_dsa_87, SensitiveBytes32};
 use sp_core::{
     crypto::{AccountId32, Ss58AddressFormat, Ss58Codec},
     hashing::blake2_256,
@@ -26,8 +26,6 @@ pub const SS58_PREFIX: u16 = 189;
 pub const SIGNING_CONTEXT: &[u8] = b"QUANTUS_EXTRINSIC";
 /// Extrinsic format version (v4, signed).
 pub const EXTRINSIC_VERSION: u8 = 4;
-/// `DilithiumSignatureScheme::Dilithium87` enum variant index.
-const SIG_VARIANT_DILITHIUM: u8 = 0;
 /// Substrate signs the blake2-256 hash of any signing payload longer than this.
 const PAYLOAD_HASH_THRESHOLD: usize = 256;
 
@@ -61,8 +59,110 @@ impl Error {
     }
 }
 
+/// Signature schemes the runtime accepts, i.e. the `DilithiumSignatureScheme`
+/// variants. ML-DSA-87 is the default everywhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Scheme {
+    #[default]
+    MlDsa87,
+    MlDsa65,
+}
+
+impl Scheme {
+    /// `DilithiumSignatureScheme` variant index written before the signature bytes.
+    const fn variant(self) -> u8 {
+        match self {
+            Scheme::MlDsa87 => 0,
+            Scheme::MlDsa65 => 1,
+        }
+    }
+
+    /// Wallet-facing name, matching the CLI `--scheme` spelling.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Scheme::MlDsa87 => "ml-dsa-87",
+            Scheme::MlDsa65 => "ml-dsa-65",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Scheme> {
+        match name {
+            "ml-dsa-87" => Some(Scheme::MlDsa87),
+            "ml-dsa-65" => Some(Scheme::MlDsa65),
+            _ => None,
+        }
+    }
+}
+
+/// A signing key of either scheme. Every signing/derivation path takes this so
+/// the extrinsic assembly is written once.
+#[allow(clippy::large_enum_variant)]
+pub enum Keypair {
+    MlDsa87(ml_dsa_87::Keypair),
+    MlDsa65(ml_dsa_65::Keypair),
+}
+
+impl From<ml_dsa_87::Keypair> for Keypair {
+    fn from(k: ml_dsa_87::Keypair) -> Self {
+        Keypair::MlDsa87(k)
+    }
+}
+
+impl From<ml_dsa_65::Keypair> for Keypair {
+    fn from(k: ml_dsa_65::Keypair) -> Self {
+        Keypair::MlDsa65(k)
+    }
+}
+
+impl Keypair {
+    /// Deterministic keypair from the first 32 bytes of `seed`.
+    pub fn from_seed(seed: &[u8], scheme: Scheme) -> Result<Self, Error> {
+        if seed.len() < 32 {
+            return Err(Error::InvalidSeed);
+        }
+        let mut seed_array = [0u8; 32];
+        seed_array.copy_from_slice(&seed[..32]);
+        let mut entropy = SensitiveBytes32::new(&mut seed_array);
+        Ok(match scheme {
+            Scheme::MlDsa87 => Keypair::MlDsa87(ml_dsa_87::Keypair::generate(&mut entropy)),
+            Scheme::MlDsa65 => Keypair::MlDsa65(ml_dsa_65::Keypair::generate(&mut entropy)),
+        })
+    }
+
+    pub fn scheme(&self) -> Scheme {
+        match self {
+            Keypair::MlDsa87(_) => Scheme::MlDsa87,
+            Keypair::MlDsa65(_) => Scheme::MlDsa65,
+        }
+    }
+
+    pub fn public_key(&self) -> Vec<u8> {
+        match self {
+            Keypair::MlDsa87(k) => k.public().to_bytes().to_vec(),
+            Keypair::MlDsa65(k) => k.public().to_bytes().to_vec(),
+        }
+    }
+
+    pub fn secret_key(&self) -> Vec<u8> {
+        match self {
+            Keypair::MlDsa87(k) => k.secret().to_bytes().to_vec(),
+            Keypair::MlDsa65(k) => k.secret().to_bytes().to_vec(),
+        }
+    }
+
+    /// Sign `msg` under [`SIGNING_CONTEXT`], as the runtime's `Pair::sign` does.
+    fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, Error> {
+        match self {
+            Keypair::MlDsa87(k) => k.sign(msg, Some(SIGNING_CONTEXT), None).map(|s| s.to_vec()),
+            Keypair::MlDsa65(k) => k.sign(msg, Some(SIGNING_CONTEXT), None).map(|s| s.to_vec()),
+        }
+        .map_err(|_| Error::SigningFailed)
+    }
+}
+
 /// Derived account material for a 32-byte seed.
 pub struct AccountKeys {
+    pub scheme: Scheme,
     pub public_key: Vec<u8>,
     pub secret_key: Vec<u8>,
     pub account_id: [u8; 32],
@@ -94,35 +194,26 @@ pub struct TransferParams {
     pub ctx: SignContext,
 }
 
-/// ML-DSA-87 keypair generation from a 32-byte seed (deterministic).
-fn keypair_from_seed(seed: &[u8]) -> Result<ml_dsa_87::Keypair, Error> {
-    if seed.len() < 32 {
-        return Err(Error::InvalidSeed);
-    }
-    let mut seed_array = [0u8; 32];
-    seed_array.copy_from_slice(&seed[..32]);
-    Ok(ml_dsa_87::Keypair::generate(&mut SensitiveBytes32::new(&mut seed_array)))
-}
-
-/// Quantus account id = Poseidon hash of the ML-DSA-87 public key.
+/// Quantus account id = Poseidon hash of the public key (both schemes).
 fn account_id_from_public(public_key: &[u8]) -> AccountId32 {
     AccountId32::new(hash_bytes(public_key))
 }
 
-/// Derive the ML-DSA-87 keypair, Poseidon `AccountId32` and SS58 address.
-pub fn derive_account(seed: &[u8]) -> Result<AccountKeys, Error> {
-    Ok(derive_account_from_keypair(&keypair_from_seed(seed)?))
+/// Derive the keypair, Poseidon `AccountId32` and SS58 address.
+pub fn derive_account(seed: &[u8], scheme: Scheme) -> Result<AccountKeys, Error> {
+    Ok(derive_account_from_keypair(&Keypair::from_seed(seed, scheme)?))
 }
 
 /// Account material for an already-derived keypair (seed or HD mnemonic path).
-pub fn derive_account_from_keypair(keypair: &ml_dsa_87::Keypair) -> AccountKeys {
-    let public_key = keypair.public().to_bytes();
+pub fn derive_account_from_keypair(keypair: &Keypair) -> AccountKeys {
+    let public_key = keypair.public_key();
     let account = account_id_from_public(&public_key);
     let mut account_id = [0u8; 32];
     account_id.copy_from_slice(account.as_ref());
     AccountKeys {
-        public_key: public_key.to_vec(),
-        secret_key: keypair.secret().to_bytes().to_vec(),
+        scheme: keypair.scheme(),
+        public_key,
+        secret_key: keypair.secret_key(),
         account_id,
         address: account.to_ss58check_with_version(Ss58AddressFormat::custom(SS58_PREFIX)),
     }
@@ -130,19 +221,24 @@ pub fn derive_account_from_keypair(keypair: &ml_dsa_87::Keypair) -> AccountKeys 
 
 /// Sign an already-encoded `RuntimeCall` (e.g. polkadot.js `tx.method.toHex()`),
 /// returning a SCALE-encoded v4 extrinsic ready for `author_submitExtrinsic`.
-pub fn sign_call(seed: &[u8], call: &[u8], ctx: &SignContext) -> Result<Vec<u8>, Error> {
-    sign_call_with_keypair(&keypair_from_seed(seed)?, call, ctx)
+pub fn sign_call(
+    seed: &[u8],
+    scheme: Scheme,
+    call: &[u8],
+    ctx: &SignContext,
+) -> Result<Vec<u8>, Error> {
+    sign_call_with_keypair(&Keypair::from_seed(seed, scheme)?, call, ctx)
 }
 
 /// [`sign_call`] with an already-derived keypair (seed or HD mnemonic path). This
 /// is the single place the signed extrinsic is assembled; `sign_transfer` builds
 /// the call bytes and delegates here.
 pub fn sign_call_with_keypair(
-    keypair: &ml_dsa_87::Keypair,
+    keypair: &Keypair,
     call: &[u8],
     ctx: &SignContext,
 ) -> Result<Vec<u8>, Error> {
-    let public_key = keypair.public().to_bytes();
+    let public_key = keypair.public_key();
     let account = account_id_from_public(&public_key);
 
     let (era, era_checkpoint_hash) = resolve_era(ctx)?;
@@ -159,9 +255,9 @@ pub fn sign_call_with_keypair(
 
     let signature = sign_payload(keypair, &payload)?;
 
-    // DilithiumSignatureScheme::Dilithium(sig || public) encoding.
+    // DilithiumSignatureScheme::<variant>(sig || public) encoding.
     let mut signature_field = Vec::with_capacity(1 + signature.len() + public_key.len());
-    signature_field.push(SIG_VARIANT_DILITHIUM);
+    signature_field.push(keypair.scheme().variant());
     signature_field.extend_from_slice(&signature);
     signature_field.extend_from_slice(&public_key);
 
@@ -181,26 +277,22 @@ pub fn sign_call_with_keypair(
 }
 
 /// Build a signed, SCALE-encoded v4 transfer extrinsic.
-pub fn sign_transfer(seed: &[u8], p: &TransferParams) -> Result<Vec<u8>, Error> {
-    sign_transfer_with_keypair(&keypair_from_seed(seed)?, p)
+pub fn sign_transfer(seed: &[u8], scheme: Scheme, p: &TransferParams) -> Result<Vec<u8>, Error> {
+    sign_transfer_with_keypair(&Keypair::from_seed(seed, scheme)?, p)
 }
 
 /// [`sign_transfer`] with an already-derived keypair. Encodes the balances/assets
 /// call, then delegates to [`sign_call_with_keypair`].
-pub fn sign_transfer_with_keypair(
-    keypair: &ml_dsa_87::Keypair,
-    p: &TransferParams,
-) -> Result<Vec<u8>, Error> {
+pub fn sign_transfer_with_keypair(keypair: &Keypair, p: &TransferParams) -> Result<Vec<u8>, Error> {
     sign_call_with_keypair(keypair, &encode_call(p), &p.ctx)
 }
 
-fn sign_payload(keypair: &ml_dsa_87::Keypair, payload: &[u8]) -> Result<Vec<u8>, Error> {
-    let signature = if payload.len() > PAYLOAD_HASH_THRESHOLD {
-        keypair.sign(&blake2_256(payload), Some(SIGNING_CONTEXT), None)
+fn sign_payload(keypair: &Keypair, payload: &[u8]) -> Result<Vec<u8>, Error> {
+    if payload.len() > PAYLOAD_HASH_THRESHOLD {
+        keypair.sign(&blake2_256(payload))
     } else {
-        keypair.sign(payload, Some(SIGNING_CONTEXT), None)
-    };
-    signature.map(|s| s.to_vec()).map_err(|_| Error::SigningFailed)
+        keypair.sign(payload)
+    }
 }
 
 /// `MultiAddress::Id(account)` encoding: variant 0 followed by the 32 bytes.
@@ -308,6 +400,57 @@ impl Era {
 mod tests {
     use super::*;
     use parity_scale_codec::Decode;
+    use qp_dilithium_crypto::{
+        verify_ml_dsa_65_with_context, verify_ml_dsa_87_with_context, Dilithium65Pair,
+        Dilithium87Pair, DilithiumSignatureScheme,
+    };
+    use sp_runtime::traits::{IdentifyAccount, Verify};
+
+    const SCHEMES: [Scheme; 2] = [Scheme::MlDsa87, Scheme::MlDsa65];
+
+    /// What the runtime crate produces for the same seed, scheme and message.
+    struct Canonical {
+        account: AccountId32,
+        signature: Vec<u8>,
+        /// `DilithiumSignatureScheme::<variant>(sig || public)` SCALE bytes.
+        signature_field: Vec<u8>,
+    }
+
+    fn canonical(seed: &[u8; 32], scheme: Scheme, msg: &[u8]) -> Canonical {
+        match scheme {
+            Scheme::MlDsa87 => {
+                let pair = Dilithium87Pair::from_seed(seed).unwrap();
+                let sig = sp_core::Pair::sign(&pair, msg);
+                Canonical {
+                    account: sp_core::Pair::public(&pair).into_account(),
+                    signature: sig.signature().as_ref().to_vec(),
+                    signature_field: DilithiumSignatureScheme::Dilithium87(sig).encode(),
+                }
+            }
+            Scheme::MlDsa65 => {
+                let pair = Dilithium65Pair::from_seed(seed).unwrap();
+                let sig = sp_core::Pair::sign(&pair, msg);
+                Canonical {
+                    account: sp_core::Pair::public(&pair).into_account(),
+                    signature: sig.signature().as_ref().to_vec(),
+                    signature_field: DilithiumSignatureScheme::Dilithium65(sig).encode(),
+                }
+            }
+        }
+    }
+
+    fn verify_with_context(
+        scheme: Scheme,
+        public: &[u8],
+        msg: &[u8],
+        sig: &[u8],
+        ctx: &[u8],
+    ) -> bool {
+        match scheme {
+            Scheme::MlDsa87 => verify_ml_dsa_87_with_context(public, msg, sig, ctx),
+            Scheme::MlDsa65 => verify_ml_dsa_65_with_context(public, msg, sig, ctx),
+        }
+    }
 
     fn sample_ctx() -> SignContext {
         SignContext {
@@ -332,29 +475,63 @@ mod tests {
     }
 
     #[test]
-    fn account_shapes_and_golden_vectors() {
-        let keys = derive_account(&[0u8; 32]).expect("derive");
+    fn scheme_names_round_trip() {
+        for scheme in SCHEMES {
+            assert_eq!(Scheme::parse(scheme.name()), Some(scheme));
+        }
+        assert_eq!(Scheme::parse("ml-dsa-44"), None);
+        assert_eq!(Scheme::default(), Scheme::MlDsa87);
+    }
+
+    #[test]
+    fn key_sizes_per_scheme() {
+        let keys = derive_account(&[0u8; 32], Scheme::MlDsa87).unwrap();
+        assert_eq!(keys.scheme, Scheme::MlDsa87);
         assert_eq!(keys.public_key.len(), ml_dsa_87::PUBLICKEYBYTES);
         assert_eq!(keys.secret_key.len(), ml_dsa_87::SECRETKEYBYTES);
-        assert_eq!(keys.account_id.len(), 32);
         assert!(keys.address.starts_with("qz"), "address: {}", keys.address);
-        println!("crystal_alice address    = {}", keys.address);
-        println!("crystal_alice account_id = 0x{}", hex::encode(keys.account_id));
+
+        let keys = derive_account(&[0u8; 32], Scheme::MlDsa65).unwrap();
+        assert_eq!(keys.scheme, Scheme::MlDsa65);
+        assert_eq!(keys.public_key.len(), ml_dsa_65::PUBLICKEYBYTES);
+        assert_eq!(keys.secret_key.len(), ml_dsa_65::SECRETKEYBYTES);
+        assert!(keys.address.starts_with("qz"), "address: {}", keys.address);
+        assert_eq!(
+            (
+                ml_dsa_65::PUBLICKEYBYTES,
+                ml_dsa_65::SECRETKEYBYTES,
+                ml_dsa_65::SIGNBYTES
+            ),
+            (1952, 4032, 3309)
+        );
+
+        assert!(Keypair::from_seed(&[0u8; 31], Scheme::MlDsa65).is_err());
     }
 
     #[test]
     fn address_matches_qp_dilithium_crypto() {
         // The canonical crate must derive the same AccountId32 from the same seed.
-        for seed_byte in [0u8, 1, 2, 42, 255] {
-            let seed = [seed_byte; 32];
-            let ours = derive_account(&seed).unwrap();
-            let pair = qp_dilithium_crypto::Dilithium87Pair::from_seed(&seed).unwrap();
-            let canonical: AccountId32 =
-                sp_runtime::traits::IdentifyAccount::into_account(
-                    sp_core::Pair::public(&pair),
+        for scheme in SCHEMES {
+            for seed_byte in [0u8, 1, 2, 42, 255] {
+                let seed = [seed_byte; 32];
+                let ours = derive_account(&seed, scheme).unwrap();
+                let theirs = canonical(&seed, scheme, b"").account;
+                assert_eq!(
+                    ours.account_id,
+                    AsRef::<[u8]>::as_ref(&theirs),
+                    "{scheme:?}"
                 );
-            assert_eq!(ours.account_id, AsRef::<[u8]>::as_ref(&canonical));
+            }
         }
+        // The two schemes give different accounts for the same seed.
+        assert_ne!(
+            derive_account(&[0u8; 32], Scheme::MlDsa87)
+                .unwrap()
+                .account_id,
+            derive_account(&[0u8; 32], Scheme::MlDsa65)
+                .unwrap()
+                .account_id
+        );
     }
 
     #[test]
@@ -379,122 +556,127 @@ mod tests {
     }
 
     #[test]
-    fn signature_field_matches_qp_dilithium_crypto() {
-        use sp_core::ByteArray;
-        let seed = [3u8; 32];
-        let keypair = keypair_from_seed(&seed).unwrap();
-        let public_key = keypair.public().to_bytes();
-        let msg = b"quantus signing payload";
-        let sig = sign_payload(&keypair, msg).unwrap();
-
-        let mut ours = Vec::new();
-        ours.push(SIG_VARIANT_DILITHIUM);
-        ours.extend_from_slice(&sig);
-        ours.extend_from_slice(&public_key);
-
-        let canonical = qp_dilithium_crypto::DilithiumSignatureScheme::Dilithium87(
-            qp_dilithium_crypto::Dilithium87SignatureWithPublic::new(
-                qp_dilithium_crypto::Dilithium87Signature::from_slice(&sig).unwrap(),
-                qp_dilithium_crypto::Dilithium87Public::from_slice(&public_key).unwrap(),
-            ),
-        )
-        .encode();
-        assert_eq!(ours, canonical);
-    }
-
-    #[test]
     fn signature_matches_canonical_pair_and_is_context_bound() {
         // Same seed + message must give the exact bytes `sp_core::Pair::sign`
-        // produces in the runtime crate (which applies the EXTRINSIC context),
-        // and must be rejected under the empty (pre-context) verification.
+        // produces in the runtime crate (which applies the EXTRINSIC context), and
+        // the same SCALE signature field. Verification under the empty
+        // (pre-context) or any other context must fail.
         let seed = [3u8; 32];
         let msg = b"quantus signing payload";
-        let keypair = keypair_from_seed(&seed).unwrap();
-        let public_key = keypair.public().to_bytes();
-        let sig = sign_payload(&keypair, msg).unwrap();
+        for scheme in SCHEMES {
+            let keypair = Keypair::from_seed(&seed, scheme).unwrap();
+            let public_key = keypair.public_key();
+            let sig = sign_payload(&keypair, msg).unwrap();
+            let theirs = canonical(&seed, scheme, msg);
+            assert_eq!(sig, theirs.signature, "{scheme:?}");
 
-        let pair = qp_dilithium_crypto::Dilithium87Pair::from_seed(&seed).unwrap();
-        let canonical = sp_core::Pair::sign(&pair, msg);
-        assert_eq!(sig, canonical.signature().as_ref());
+            let mut ours = Vec::new();
+            ours.push(scheme.variant());
+            ours.extend_from_slice(&sig);
+            ours.extend_from_slice(&public_key);
+            assert_eq!(ours, theirs.signature_field, "{scheme:?}");
 
-        assert!(qp_dilithium_crypto::verify_ml_dsa_87(&public_key, msg, &sig));
-        assert!(!qp_dilithium_crypto::verify_ml_dsa_87_with_context(&public_key, msg, &sig, b""));
-        assert!(!qp_dilithium_crypto::verify_ml_dsa_87_with_context(
-            &public_key,
-            msg,
-            &sig,
-            b"other-context"
-        ));
+            assert!(verify_with_context(
+                scheme,
+                &public_key,
+                msg,
+                &sig,
+                SIGNING_CONTEXT
+            ));
+            assert!(!verify_with_context(scheme, &public_key, msg, &sig, b""));
+            assert!(!verify_with_context(
+                scheme,
+                &public_key,
+                msg,
+                &sig,
+                b"other-context"
+            ));
+        }
     }
 
     #[test]
     fn signature_is_deterministic_known_value() {
-        // ML-DSA-87 signing is deterministic when no hedge entropy is supplied,
-        // so a fixed (seed, message) yields a fixed signature. Frozen here as a
-        // golden vector: a dependency bump that changes the signature bytes (and
-        // would silently break on-chain verification) fails this test.
+        // ML-DSA signing is deterministic when no hedge entropy is supplied, so a
+        // fixed (seed, message) yields a fixed signature. Frozen here as golden
+        // vectors: a dependency bump that changes the signature bytes (and would
+        // silently break on-chain verification) fails this test.
         let seed = [7u8; 32];
         let message = b"quantus deterministic signature vector";
-        let keypair = keypair_from_seed(&seed).unwrap();
-        let sig = sign_payload(&keypair, message).unwrap();
-        assert_eq!(sig.len(), ml_dsa_87::SIGNBYTES);
-
-        // Same input signs identically across calls (determinism).
-        let sig_again = sign_payload(&keypair_from_seed(&seed).unwrap(), message).unwrap();
-        assert_eq!(sig, sig_again);
-
-        // Frozen digest of the 4627-byte signature (kept compact).
-        let digest = hex::encode(blake2_256(&sig));
-        assert_eq!(digest, "2ddb9d1e2fffa950cb7bd003bd34abf35b56cc0c99f1a703a77b5c54f4de017e");
-
-        // The signature verifies under the canonical chain crate (EXTRINSIC context).
-        let public_key = keypair.public().to_bytes();
-        assert!(qp_dilithium_crypto::verify_ml_dsa_87(&public_key, message, &sig));
+        for (scheme, expected) in [
+            (
+                Scheme::MlDsa87,
+                "2ddb9d1e2fffa950cb7bd003bd34abf35b56cc0c99f1a703a77b5c54f4de017e",
+            ),
+            (
+                Scheme::MlDsa65,
+                "3e5e7e57a5f40246e74de641a1c5e02db1d8bddf8cf0ea93db1a7df5dbff8100",
+            ),
+        ] {
+            let keypair = Keypair::from_seed(&seed, scheme).unwrap();
+            let sig = sign_payload(&keypair, message).unwrap();
+            let sig_again =
+                sign_payload(&Keypair::from_seed(&seed, scheme).unwrap(), message).unwrap();
+            assert_eq!(sig, sig_again);
+            assert_eq!(hex::encode(blake2_256(&sig)), expected, "{scheme:?}");
+            assert!(verify_with_context(
+                scheme,
+                &keypair.public_key(),
+                message,
+                &sig,
+                SIGNING_CONTEXT
+            ));
+        }
     }
 
     #[test]
     fn signed_transfer_signature_verifies() {
         let seed = [0u8; 32];
         let p = sample_params(None);
-        let xt = sign_transfer(&seed, &p).expect("sign");
+        for scheme in SCHEMES {
+            let xt = sign_transfer(&seed, scheme, &p).expect("sign");
 
-        let mut input = &xt[..];
-        let body_len = <Compact<u32>>::decode(&mut input).unwrap().0 as usize;
-        assert_eq!(body_len, input.len());
-        assert_eq!(input[0], 0x84); // signed v4
-        assert_eq!(input[1], 0x00); // MultiAddress::Id
-        assert_eq!(input[1 + 1 + 32], SIG_VARIANT_DILITHIUM);
+            let mut input = &xt[..];
+            let body_len = <Compact<u32>>::decode(&mut input).unwrap().0 as usize;
+            assert_eq!(body_len, input.len());
+            assert_eq!(input[0], 0x84); // signed v4
+            assert_eq!(input[1], 0x00); // MultiAddress::Id
+            assert_eq!(input[1 + 1 + 32], scheme.variant());
 
-        // Recompute the signed payload and verify the embedded signature.
-        let (era, hash) = resolve_era(&p.ctx).unwrap();
-        let mut payload = encode_call(&p);
-        payload.extend_from_slice(&encode_extra(&era, p.ctx.nonce, p.ctx.tip));
-        payload.extend_from_slice(&encode_implicit(&p.ctx, hash));
-        let signable = if payload.len() > PAYLOAD_HASH_THRESHOLD {
-            blake2_256(&payload).to_vec()
-        } else {
-            payload
-        };
-        // Decode the signature field exactly as the runtime does and verify it
-        // through the chain's `Verify` impl: this checks the EXTRINSIC context and
-        // that the embedded public key hashes to the signer address.
-        let keys = derive_account(&seed).unwrap();
-        let signer = AccountId32::new(keys.account_id);
-        assert_eq!(&input[2..34], &keys.account_id[..]);
-        let mut sig_field = &input[34..];
-        let scheme = qp_dilithium_crypto::DilithiumSignatureScheme::decode(&mut sig_field).unwrap();
-        assert!(sp_runtime::traits::Verify::verify(&scheme, &signable[..], &signer));
-        assert!(!sp_runtime::traits::Verify::verify(
-            &scheme,
-            &signable[..],
-            &AccountId32::new([2u8; 32])
-        ));
+            // Recompute the signed payload and verify the embedded signature.
+            let (era, hash) = resolve_era(&p.ctx).unwrap();
+            let mut payload = encode_call(&p);
+            payload.extend_from_slice(&encode_extra(&era, p.ctx.nonce, p.ctx.tip));
+            payload.extend_from_slice(&encode_implicit(&p.ctx, hash));
+            let signable = if payload.len() > PAYLOAD_HASH_THRESHOLD {
+                blake2_256(&payload).to_vec()
+            } else {
+                payload
+            };
+            // Decode the signature field exactly as the runtime does and verify it
+            // through the chain's `Verify` impl: this checks the EXTRINSIC context and
+            // that the embedded public key hashes to the signer address.
+            let keys = derive_account(&seed, scheme).unwrap();
+            let signer = AccountId32::new(keys.account_id);
+            assert_eq!(&input[2..34], &keys.account_id[..]);
+            let mut sig_field = &input[34..];
+            let decoded = DilithiumSignatureScheme::decode(&mut sig_field).unwrap();
+            assert!(decoded.verify(&signable[..], &signer), "{scheme:?}");
+            assert!(!decoded.verify(&signable[..], &AccountId32::new([2u8; 32])));
+            // Nothing but `extra || call` follows the signature field.
+            assert_eq!(
+                sig_field.len(),
+                encode_extra(&era, p.ctx.nonce, p.ctx.tip).len() + encode_call(&p).len()
+            );
+        }
     }
 
     #[test]
     fn pallet_indices() {
         let bal = encode_call(&sample_params(None));
-        assert_eq!((bal[0], bal[1]), (BALANCES_PALLET, BALANCES_TRANSFER_ALLOW_DEATH));
+        assert_eq!(
+            (bal[0], bal[1]),
+            (BALANCES_PALLET, BALANCES_TRANSFER_ALLOW_DEATH)
+        );
         let asset = encode_call(&sample_params(Some(42)));
         assert_eq!((asset[0], asset[1]), (ASSETS_PALLET, ASSETS_TRANSFER));
     }
@@ -506,8 +688,10 @@ mod tests {
         let seed = [0u8; 32];
         let p = sample_params(None);
         let call = encode_call(&p);
-        let via_transfer = sign_transfer(&seed, &p).unwrap();
-        let via_call = sign_call(&seed, &call, &p.ctx).unwrap();
-        assert_eq!(via_transfer, via_call);
+        for scheme in SCHEMES {
+            let via_transfer = sign_transfer(&seed, scheme, &p).unwrap();
+            let via_call = sign_call(&seed, scheme, &call, &p.ctx).unwrap();
+            assert_eq!(via_transfer, via_call);
+        }
     }
 }

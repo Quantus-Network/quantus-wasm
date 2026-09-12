@@ -1,13 +1,14 @@
 # @quantus-network/wasm
 
-Quantus account derivation and **ML-DSA-87** transaction signing for JavaScript/TypeScript.
+Quantus account derivation and **ML-DSA-87** / **ML-DSA-65** transaction signing for JavaScript/TypeScript.
 
-This package is **compiled to WebAssembly from the Quantus chain's own crypto crates** — addresses come from `qp-poseidon-core` (Poseidon2 over Goldilocks) and signatures from `qp-rusty-crystals-dilithium` (ML-DSA-87), the exact code the runtime uses. Nothing about address derivation or extrinsic encoding is re-implemented in JS, so there is no second implementation to drift out of sync with the chain.
+This package is **compiled to WebAssembly from the Quantus chain's own crypto crates** — addresses come from `qp-poseidon-core` (Poseidon2 over Goldilocks) and signatures from `qp-rusty-crystals-dilithium` (ML-DSA-87 and ML-DSA-65), the exact code the runtime uses. Nothing about address derivation or extrinsic encoding is re-implemented in JS, so there is no second implementation to drift out of sync with the chain.
 
-- `account(seed)` → ML-DSA-87 keypair → Poseidon `AccountId32` → SS58 address (prefix `189`).
+- `account(seed, opts?)` → ML-DSA keypair → Poseidon `AccountId32` → SS58 address (prefix `189`).
 - `signTransfer(seed, params)` → a signed **v4 extrinsic**, ready for `author_submitExtrinsic`.
 - `signCall(seed, call, params)` → sign **any** call (build it with polkadot.js, sign it here).
 - BIP39 mnemonic helpers using the canonical Quantus HD path.
+- Every function takes an optional `scheme`: `"ml-dsa-87"` (default) or `"ml-dsa-65"`.
 
 ## Install
 
@@ -44,16 +45,36 @@ const extrinsicHex =
 // await rpc("author_submitExtrinsic", [extrinsicHex]);
 ```
 
+## Signature schemes
+
+The runtime accepts two signature schemes (`DilithiumSignatureScheme`), and this package supports both. Pass `scheme` in the options/params object of any function; omit it for ML-DSA-87, so existing code keeps working unchanged.
+
+| `scheme` | Public key | Secret key | Signature | Wire variant | Runtime |
+|---|---|---|---|---|---|
+| `"ml-dsa-87"` (default) | 2592 bytes | 4896 bytes | 4627 bytes | `Dilithium87` = 0 | all |
+| `"ml-dsa-65"` | 1952 bytes | 4032 bytes | 3309 bytes | `Dilithium65` = 1 | spec 139 and later |
+
+Both schemes derive the account id the same way (Poseidon hash of the public key) and sign under the same `QUANTUS_EXTRINSIC` context. The same seed gives a different account per scheme. For mnemonics, the default `addressIndex` is `0` for ML-DSA-87 and `1` for ML-DSA-65, matching the Quantus wallets (`quantus wallet import --scheme ml-dsa-65`), so the two schemes never derive from the same entropy.
+
+```ts
+const a = account(seed, { scheme: "ml-dsa-65" });
+const xt = signTransfer(seed, { scheme: "ml-dsa-65", recipient, amount, nonce, genesisHash, specVersion, transactionVersion });
+const b = accountFromMnemonic(mnemonic, { scheme: "ml-dsa-65" }); // m/44'/189189'/0'/0'/1'
+```
+
 ## API
 
-### `account(seed: Uint8Array): QuantusAccount`
+### `account(seed: Uint8Array, opts?: { scheme?: Scheme }): QuantusAccount`
 
 Derives the keypair and address from a 32-byte seed.
 
 ```ts
+type Scheme = "ml-dsa-87" | "ml-dsa-65";
+
 interface QuantusAccount {
-  publicKey: Uint8Array; // ML-DSA-87 public key (2592 bytes)
-  secretKey: Uint8Array; // ML-DSA-87 secret key (4896 bytes)
+  scheme: Scheme;        // scheme of the key
+  publicKey: Uint8Array; // ML-DSA-87: 2592 bytes, ML-DSA-65: 1952 bytes
+  secretKey: Uint8Array; // ML-DSA-87: 4896 bytes, ML-DSA-65: 4032 bytes
   accountId: Uint8Array; // 32-byte Poseidon AccountId32
   address: string;       // SS58, Quantus prefix (189)
 }
@@ -65,6 +86,7 @@ Builds and signs a v4 extrinsic for a balances or assets transfer. Returns the S
 
 ```ts
 interface TransferParams {
+  scheme?: Scheme;      // signing key scheme; default "ml-dsa-87"
   recipient: string | Uint8Array; // SS58, 0x-hex 32-byte id, or raw 32 bytes
   amount: bigint | string | number; // plancks (u128)
   assetId?: number;     // set => assets.transfer; omitted => balances.transfer_allow_death
@@ -119,6 +141,7 @@ The `call` is a `0x`-hex string or `Uint8Array`. `CallParams` is the chain conte
 type Call = Uint8Array | string; // SCALE-encoded RuntimeCall
 
 interface CallParams {
+  scheme?: Scheme;      // signing key scheme; default "ml-dsa-87"
   nonce: number | bigint;
   tip?: bigint | string | number; // default 0
   period?: number | bigint; // mortal era length in blocks; 0/omitted => immortal
@@ -138,12 +161,15 @@ Derives an account from a BIP39 mnemonic using the Quantus HD path `m/44'/189189
 
 ```ts
 interface MnemonicOptions {
+  scheme?: Scheme;       // default "ml-dsa-87"
   account?: number;      // default 0
   change?: number;       // default 0
-  addressIndex?: number; // default 0
+  addressIndex?: number; // default 0 for ml-dsa-87, 1 for ml-dsa-65
   passphrase?: string;   // optional BIP39 passphrase
 }
 ```
+
+When `scheme` is given in both the options and the params, the options win: they select the key.
 
 ### `signTransferFromMnemonic(mnemonic, params, opts?): Uint8Array`
 
@@ -163,7 +189,7 @@ Correctness is validated byte-for-byte against the canonical chain crates and fr
 
 - **Addresses** match `qp-dilithium-crypto`'s `IdentifyAccount`, and reproduce known chain-spec mnemonic vectors.
 - **`Era`** encoding matches `sp-runtime::generic::Era`.
-- **Signatures** are deterministic ML-DSA-87 bound to the FIPS 204 context `QUANTUS_EXTRINSIC` (the runtime's `signing_context::EXTRINSIC`). They are frozen as golden vectors, compared byte-for-byte against `sp_core::Pair::sign` from `qp-dilithium-crypto`, and verified through the runtime's `Verify` impl. A signature under any other context (including none) is rejected on chain.
+- **Signatures** (ML-DSA-87 and ML-DSA-65) are deterministic and bound to the FIPS 204 context `QUANTUS_EXTRINSIC` (the runtime's `signing_context::EXTRINSIC`). They are frozen as golden vectors, compared byte-for-byte against `sp_core::Pair::sign` from `qp-dilithium-crypto`, and verified through the runtime's `Verify` impl after decoding the extrinsic's signature field. A signature under any other context (including none) is rejected on chain.
 - **Transaction extensions** match the runtime's `TxExtension` (CheckMortality, CheckNonce, ChargeTransactionPayment, CheckMetadataHash, and the custom Reversible/Wormhole extensions, which contribute no signed bytes).
 
 ## Examples

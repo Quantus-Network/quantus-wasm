@@ -1,8 +1,11 @@
-//! WASM bindings for Quantus account derivation and ML-DSA-87 extrinsic signing.
+//! WASM bindings for Quantus account derivation and ML-DSA extrinsic signing.
 //!
 //! Exposes two entry points to JavaScript/TypeScript:
-//! - [`account`]: 32-byte seed -> ML-DSA-87 keypair, Poseidon `AccountId32`, SS58 address.
+//! - [`account`]: 32-byte seed -> ML-DSA keypair, Poseidon `AccountId32`, SS58 address.
 //! - [`signTransfer`]: 32-byte seed + transfer params -> signed v4 extrinsic bytes.
+//!
+//! Every entry point takes an optional `scheme` (`"ml-dsa-87"`, the default, or
+//! `"ml-dsa-65"`) selecting the signing key type.
 
 extern crate alloc;
 use alloc::string::String;
@@ -13,6 +16,7 @@ use sp_core::crypto::AccountId32;
 use wasm_bindgen::prelude::*;
 
 mod ext;
+pub use ext::Scheme;
 
 #[cfg(feature = "mnemonic")]
 mod mnemonic;
@@ -20,6 +24,7 @@ mod mnemonic;
 /// Account material derived from a seed. Byte fields surface as `Uint8Array`.
 #[wasm_bindgen]
 pub struct Account {
+    scheme: Scheme,
     public_key: Vec<u8>,
     secret_key: Vec<u8>,
     account_id: Vec<u8>,
@@ -28,13 +33,19 @@ pub struct Account {
 
 #[wasm_bindgen]
 impl Account {
-    /// ML-DSA-87 public key (2592 bytes).
+    /// Signature scheme of the key: `"ml-dsa-87"` or `"ml-dsa-65"`.
+    #[wasm_bindgen(getter)]
+    pub fn scheme(&self) -> String {
+        self.scheme.name().into()
+    }
+
+    /// Public key (ML-DSA-87: 2592 bytes, ML-DSA-65: 1952 bytes).
     #[wasm_bindgen(getter, js_name = publicKey)]
     pub fn public_key(&self) -> Vec<u8> {
         self.public_key.clone()
     }
 
-    /// ML-DSA-87 secret key (4896 bytes).
+    /// Secret key (ML-DSA-87: 4896 bytes, ML-DSA-65: 4032 bytes).
     #[wasm_bindgen(getter, js_name = secretKey)]
     pub fn secret_key(&self) -> Vec<u8> {
         self.secret_key.clone()
@@ -55,13 +66,14 @@ impl Account {
 
 /// Derive a Quantus account from a 32-byte seed.
 #[wasm_bindgen]
-pub fn account(seed: &[u8]) -> Result<Account, JsError> {
-    let keys = ext::derive_account(seed).map_err(to_js_error)?;
+pub fn account(seed: &[u8], scheme: Option<String>) -> Result<Account, JsError> {
+    let keys = ext::derive_account(seed, parse_scheme(scheme.as_deref())?).map_err(to_js_error)?;
     Ok(account_from_keys(keys))
 }
 
 pub(crate) fn account_from_keys(keys: ext::AccountKeys) -> Account {
     Account {
+        scheme: keys.scheme,
         public_key: keys.public_key,
         secret_key: keys.secret_key,
         account_id: keys.account_id.to_vec(),
@@ -73,6 +85,9 @@ pub(crate) fn account_from_keys(keys: ext::AccountKeys) -> Account {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct JsSignContext {
+    /// Signing key scheme name; defaults to ML-DSA-87.
+    #[serde(default)]
+    scheme: Option<String>,
     nonce: u64,
     /// Tip in plancks as a decimal string (u128); defaults to "0".
     #[serde(default)]
@@ -110,38 +125,58 @@ struct JsTransferParams {
 /// Sign a balances/assets transfer, returning the SCALE-encoded v4 extrinsic.
 #[wasm_bindgen(js_name = signTransfer)]
 pub fn sign_transfer(seed: &[u8], params: JsValue) -> Result<Vec<u8>, JsError> {
-    let params = build_transfer_params(params)?;
-    ext::sign_transfer(seed, &params).map_err(to_js_error)
+    let (params, scheme) = build_transfer_params(params)?;
+    ext::sign_transfer(seed, scheme, &params).map_err(to_js_error)
 }
 
 /// Sign an already-encoded `RuntimeCall` (e.g. polkadot.js `tx.method.toU8a()`),
 /// returning the SCALE-encoded v4 extrinsic.
 #[wasm_bindgen(js_name = signCall)]
 pub fn sign_call(seed: &[u8], call: &[u8], context: JsValue) -> Result<Vec<u8>, JsError> {
-    let ctx = build_sign_context_from_value(context)?;
-    ext::sign_call(seed, call, &ctx).map_err(to_js_error)
+    let (ctx, scheme) = build_sign_context_from_value(context)?;
+    ext::sign_call(seed, scheme, call, &ctx).map_err(to_js_error)
 }
 
-pub(crate) fn build_transfer_params(params: JsValue) -> Result<ext::TransferParams, JsError> {
+pub(crate) fn parse_scheme(name: Option<&str>) -> Result<Scheme, JsError> {
+    match name {
+        None => Ok(Scheme::default()),
+        Some(name) => Scheme::parse(name).ok_or_else(|| {
+            JsError::new(&alloc::format!(
+                "scheme: expected \"ml-dsa-87\" or \"ml-dsa-65\", got \"{name}\""
+            ))
+        }),
+    }
+}
+
+pub(crate) fn build_transfer_params(
+    params: JsValue,
+) -> Result<(ext::TransferParams, Scheme), JsError> {
     let p: JsTransferParams = serde_wasm_bindgen::from_value(params)
         .map_err(|e| JsError::new(&alloc::format!("invalid params: {e}")))?;
 
-    Ok(ext::TransferParams {
-        recipient: parse_account_id(&p.recipient)?,
-        amount: parse_u128(&p.amount, "amount")?,
-        asset_id: p.asset_id,
-        ctx: build_sign_context(&p.ctx)?,
-    })
+    let (ctx, scheme) = build_sign_context(&p.ctx)?;
+    Ok((
+        ext::TransferParams {
+            recipient: parse_account_id(&p.recipient)?,
+            amount: parse_u128(&p.amount, "amount")?,
+            asset_id: p.asset_id,
+            ctx,
+        },
+        scheme,
+    ))
 }
 
-pub(crate) fn build_sign_context_from_value(context: JsValue) -> Result<ext::SignContext, JsError> {
+pub(crate) fn build_sign_context_from_value(
+    context: JsValue,
+) -> Result<(ext::SignContext, Scheme), JsError> {
     let c: JsSignContext = serde_wasm_bindgen::from_value(context)
         .map_err(|e| JsError::new(&alloc::format!("invalid params: {e}")))?;
     build_sign_context(&c)
 }
 
-fn build_sign_context(c: &JsSignContext) -> Result<ext::SignContext, JsError> {
-    Ok(ext::SignContext {
+fn build_sign_context(c: &JsSignContext) -> Result<(ext::SignContext, Scheme), JsError> {
+    let scheme = parse_scheme(c.scheme.as_deref())?;
+    let ctx = ext::SignContext {
         nonce: c.nonce,
         tip: match c.tip {
             Some(ref s) => parse_u128(s, "tip")?,
@@ -156,7 +191,8 @@ fn build_sign_context(c: &JsSignContext) -> Result<ext::SignContext, JsError> {
         },
         spec_version: c.spec_version,
         transaction_version: c.transaction_version,
-    })
+    };
+    Ok((ctx, scheme))
 }
 
 pub(crate) fn to_js_error(e: ext::Error) -> JsError {

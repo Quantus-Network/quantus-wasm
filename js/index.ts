@@ -1,5 +1,5 @@
 /**
- * Quantus account derivation and ML-DSA-87 transaction signing.
+ * Quantus account derivation and ML-DSA transaction signing.
  *
  * Thin, typed wrapper over the wasm produced from the chain's own crypto crates
  * (`qp-poseidon-core`, `qp-rusty-crystals-dilithium`). No cryptography or
@@ -8,11 +8,25 @@
  */
 import * as wasm from "../pkg/quantus_wasm.js";
 
+/**
+ * Signature scheme of a signing key. The runtime accepts both; `"ml-dsa-87"` is
+ * the default everywhere in this package.
+ */
+export type Scheme = "ml-dsa-87" | "ml-dsa-65";
+
+/** Options for seed-based account derivation. */
+export interface AccountOptions {
+  /** Signature scheme (default `"ml-dsa-87"`). */
+  scheme?: Scheme;
+}
+
 /** Material derived from a 32-byte seed. */
 export interface QuantusAccount {
-  /** ML-DSA-87 public key (2592 bytes). */
+  /** Signature scheme of the key. */
+  scheme: Scheme;
+  /** Public key (ML-DSA-87: 2592 bytes, ML-DSA-65: 1952 bytes). */
   publicKey: Uint8Array;
-  /** ML-DSA-87 secret key (4896 bytes). */
+  /** Secret key (ML-DSA-87: 4896 bytes, ML-DSA-65: 4032 bytes). */
   secretKey: Uint8Array;
   /** 32-byte Poseidon `AccountId32`. */
   accountId: Uint8Array;
@@ -32,6 +46,8 @@ export type Call = Uint8Array | string;
 
 /** Chain context shared by every signed extrinsic. */
 export interface CallParams {
+  /** Signature scheme of the signing key (default `"ml-dsa-87"`). */
+  scheme?: Scheme;
   nonce: number | bigint;
   /** Tip in plancks; defaults to 0. */
   tip?: Amount;
@@ -114,19 +130,29 @@ function toBytes(value: Call, field: string): Uint8Array {
 
 /** Quantus HD derivation indices and BIP39 passphrase. */
 export interface MnemonicOptions {
+  /** Signature scheme (default `"ml-dsa-87"`). */
+  scheme?: Scheme;
   /** BIP44 account index (default 0). */
   account?: number;
   /** Change index (default 0). */
   change?: number;
-  /** Address index (default 0). */
+  /**
+   * Address index. Defaults to 0 for ML-DSA-87 and 1 for ML-DSA-65, matching the
+   * Quantus wallets, so the two schemes never derive from the same entropy.
+   */
   addressIndex?: number;
   /** Optional BIP39 passphrase. */
   passphrase?: string;
 }
 
+function defaultAddressIndex(scheme: Scheme | undefined): number {
+  return scheme === "ml-dsa-65" ? 1 : 0;
+}
+
 function materialize(handle: wasm.Account): QuantusAccount {
   try {
     return {
+      scheme: handle.scheme as Scheme,
       publicKey: handle.publicKey,
       secretKey: handle.secretKey,
       accountId: handle.accountId,
@@ -137,9 +163,9 @@ function materialize(handle: wasm.Account): QuantusAccount {
   }
 }
 
-/** Derive the ML-DSA-87 keypair, Poseidon `AccountId32`, and SS58 address. */
-export function account(seed: Uint8Array): QuantusAccount {
-  return materialize(wasm.account(asSeed(seed)));
+/** Derive the ML-DSA keypair, Poseidon `AccountId32`, and SS58 address. */
+export function account(seed: Uint8Array, opts: AccountOptions = {}): QuantusAccount {
+  return materialize(wasm.account(asSeed(seed), opts.scheme));
 }
 
 /**
@@ -155,8 +181,9 @@ export function accountFromMnemonic(
       mnemonic,
       opts.account ?? 0,
       opts.change ?? 0,
-      opts.addressIndex ?? 0,
-      opts.passphrase
+      opts.addressIndex ?? defaultAddressIndex(opts.scheme),
+      opts.passphrase,
+      opts.scheme
     )
   );
 }
@@ -183,12 +210,13 @@ export function signTransferFromMnemonic(
   params: TransferParams,
   opts: MnemonicOptions = {}
 ): Uint8Array {
+  const scheme = opts.scheme ?? params.scheme;
   return wasm.signTransferFromMnemonic(
     mnemonic,
-    encodeTransfer(params),
+    encodeTransfer(params, scheme),
     opts.account ?? 0,
     opts.change ?? 0,
-    opts.addressIndex ?? 0,
+    opts.addressIndex ?? defaultAddressIndex(scheme),
     opts.passphrase
   );
 }
@@ -212,23 +240,29 @@ export function signCallFromMnemonic(
   params: CallParams,
   opts: MnemonicOptions = {}
 ): Uint8Array {
+  const scheme = opts.scheme ?? params.scheme;
   return wasm.signCallFromMnemonic(
     mnemonic,
     toBytes(call, "call"),
-    encodeContext(params),
+    encodeContext(params, scheme),
     opts.account ?? 0,
     opts.change ?? 0,
-    opts.addressIndex ?? 0,
+    opts.addressIndex ?? defaultAddressIndex(scheme),
     opts.passphrase
   );
 }
 
-function encodeContext(params: CallParams): Record<string, unknown> {
+/**
+ * `scheme` may come from the params (seed API) or the mnemonic options; the
+ * mnemonic options win when both are given, since they select the key.
+ */
+function encodeContext(params: CallParams, scheme?: Scheme): Record<string, unknown> {
   const period = params.period === undefined ? 0 : toNumber(params.period, "period");
   if (period > 0 && params.blockHash === undefined) {
     throw new TypeError("blockHash is required for mortal eras (period > 0)");
   }
   return {
+    scheme: scheme ?? params.scheme,
     nonce: toNumber(params.nonce, "nonce"),
     tip: params.tip === undefined ? "0" : toDecimal(params.tip, "tip"),
     period,
@@ -241,11 +275,11 @@ function encodeContext(params: CallParams): Record<string, unknown> {
   };
 }
 
-function encodeTransfer(params: TransferParams): Record<string, unknown> {
+function encodeTransfer(params: TransferParams, scheme?: Scheme): Record<string, unknown> {
   return {
     recipient: toRecipient(params.recipient),
     amount: toDecimal(params.amount, "amount"),
     assetId: params.assetId,
-    ...encodeContext(params),
+    ...encodeContext(params, scheme),
   };
 }

@@ -7,6 +7,7 @@ const {
   signCall,
   accountFromMnemonic,
   signTransferFromMnemonic,
+  signCallFromMnemonic,
   mnemonicToSeed,
 } = require("../dist/index.js");
 
@@ -165,4 +166,100 @@ test("signTransfer requires blockHash for mortal eras", () => {
       transactionVersion: 1,
     })
   );
+});
+
+// ML-DSA-65 (DilithiumSignatureScheme::Dilithium65, variant 1). Default stays ML-DSA-87.
+const ML_DSA_65 = "ml-dsa-65";
+// `quantus wallet import --scheme ml-dsa-65` for MNEMONIC (default path .../1').
+const ML_DSA_65_ADDRESS = "qzoyC4eRTrexYoutXABVsf61QJZxJim3iWvayRQwEjXWgA4mw";
+
+test("account defaults to ML-DSA-87 and derives ML-DSA-65 on request", () => {
+  const a87 = account(CRYSTAL_ALICE_SEED);
+  assert.equal(a87.scheme, "ml-dsa-87");
+  assert.equal(a87.address, CRYSTAL_ALICE_ADDRESS);
+  assert.deepEqual(account(CRYSTAL_ALICE_SEED, { scheme: "ml-dsa-87" }), a87);
+
+  const a65 = account(CRYSTAL_ALICE_SEED, { scheme: ML_DSA_65 });
+  assert.equal(a65.scheme, ML_DSA_65);
+  assert.equal(a65.publicKey.length, 1952);
+  assert.equal(a65.secretKey.length, 4032);
+  assert.notEqual(a65.address, a87.address);
+
+  assert.throws(() => account(CRYSTAL_ALICE_SEED, { scheme: "ml-dsa-44" }), /scheme/);
+});
+
+test("accountFromMnemonic with ML-DSA-65 matches the wallet vector", () => {
+  const a = accountFromMnemonic(MNEMONIC, { scheme: ML_DSA_65 });
+  assert.equal(a.scheme, ML_DSA_65);
+  assert.equal(a.address, ML_DSA_65_ADDRESS);
+  // The default address index for ML-DSA-65 is 1; index 0 is a different key.
+  assert.equal(accountFromMnemonic(MNEMONIC, { scheme: ML_DSA_65, addressIndex: 1 }).address, ML_DSA_65_ADDRESS);
+  assert.notEqual(accountFromMnemonic(MNEMONIC, { scheme: ML_DSA_65, addressIndex: 0 }).address, ML_DSA_65_ADDRESS);
+  // ML-DSA-87 default index stays 0.
+  assert.equal(
+    accountFromMnemonic(MNEMONIC, { scheme: "ml-dsa-87" }).address,
+    "qzm5QCox8Dp5A3oSXZZYHD8YoYgPz7enykZb6RPUropdCyN5h"
+  );
+});
+
+test("signTransfer with ML-DSA-65 produces a variant-1 signed extrinsic (frozen)", () => {
+  const params = {
+    recipient: "0x" + "02".repeat(32),
+    amount: "1000",
+    nonce: 0,
+    genesisHash: "0x" + "11".repeat(32),
+    specVersion: 1,
+    transactionVersion: 1,
+  };
+  const xt = signTransfer(CRYSTAL_ALICE_SEED, { ...params, scheme: ML_DSA_65 });
+  // 2 (compact len) + 1 (0x84) + 33 (address) + 1 (variant) + 3309 (sig) + 1952 (pub) + 4 (extra) + 37 (call).
+  assert.equal(xt.length, 5339);
+  assert.equal(xt[2], 0x84);
+  assert.equal(xt[2 + 1 + 33], 0x01);
+  assert.deepEqual(xt.subarray(4, 36), account(CRYSTAL_ALICE_SEED, { scheme: ML_DSA_65 }).accountId);
+  const digest = createHash("sha256").update(Buffer.from(xt)).digest("hex");
+  assert.equal(digest, "6cc3feaa3cf1d75e9814a67acefb124e775dbba9d699d92cc41c5c6ef3def000");
+
+  // signCall honours the same scheme field.
+  const call = "0x020000" + "02".repeat(32) + "a10f";
+  assert.deepEqual(signCall(CRYSTAL_ALICE_SEED, call, { ...params, scheme: ML_DSA_65 }), xt);
+  // Without the field the extrinsic is the ML-DSA-87 one.
+  assert.equal(signTransfer(CRYSTAL_ALICE_SEED, params).length, 7297);
+});
+
+test("signTransferFromMnemonic with ML-DSA-65 signs with the derived key", () => {
+  const xt = signTransferFromMnemonic(
+    MNEMONIC,
+    {
+      recipient: CRYSTAL_ALICE_ADDRESS,
+      amount: 500n,
+      nonce: 3,
+      genesisHash: "0x" + "11".repeat(32),
+      specVersion: 100,
+      transactionVersion: 1,
+    },
+    { scheme: ML_DSA_65 }
+  );
+  assert.equal(xt[2 + 1 + 33], 0x01);
+  assert.deepEqual(xt.subarray(4, 36), accountFromMnemonic(MNEMONIC, { scheme: ML_DSA_65 }).accountId);
+});
+
+test("mnemonic signing takes the ML-DSA-65 default index from params.scheme too", () => {
+  const params = {
+    recipient: CRYSTAL_ALICE_ADDRESS,
+    amount: 500n,
+    nonce: 3,
+    genesisHash: "0x" + "11".repeat(32),
+    specVersion: 100,
+    transactionVersion: 1,
+    scheme: ML_DSA_65,
+  };
+  const expected = accountFromMnemonic(MNEMONIC, { scheme: ML_DSA_65 }).accountId;
+  const xt = signTransferFromMnemonic(MNEMONIC, params);
+  assert.equal(xt[2 + 1 + 33], 0x01);
+  assert.deepEqual(xt.subarray(4, 36), expected);
+  const call = "0x020000" + "02".repeat(32) + "a10f";
+  const xtCall = signCallFromMnemonic(MNEMONIC, call, params);
+  assert.equal(xtCall[2 + 1 + 33], 0x01);
+  assert.deepEqual(xtCall.subarray(4, 36), expected);
 });
