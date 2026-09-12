@@ -1,7 +1,8 @@
 name: Publish to npm
 
-# Publishes when a GitHub Release is published (tag the release with the version,
-# e.g. v0.1.0). Can also be run manually from the Actions tab.
+# Publishes @quantus-network/wasm when a GitHub Release tagged vX.Y.Z is
+# published (releases tagged wormhole-vX.Y.Z belong to the wormhole package and
+# are handled by native.yml). Can also be run manually from the Actions tab.
 on:
   release:
     types: [published]
@@ -13,6 +14,7 @@ permissions:
 
 jobs:
   publish:
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

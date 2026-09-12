@@ -4,12 +4,12 @@
 
 Never run any of these; tell the user to run them and stop:
 
-- `scripts/create-release.sh` or `npm version` (they commit, tag, push `main`, and create a GitHub Release)
+- `scripts/create-release.sh`, `wormhole/native/scripts/create-release.sh` or `npm version` (they commit, tag, push `main`, and create a GitHub Release)
 - `gh release create` / `gh release edit` / `gh release delete`
 - `npm publish`, `npm deprecate`, `npm unpublish`
 - `gh workflow run` / `gh run rerun` / `gh run cancel` for `publish.yml` or `native.yml`
 
-Publishing a GitHub Release triggers `publish.yml`, which publishes to npm. So creating a release *is* publishing.
+Publishing a GitHub Release triggers `publish.yml` (tags `vX.Y.Z`, the wasm package) or `native.yml` (tags `wormhole-vX.Y.Z`, the wormhole package), which publish to npm. So creating a release *is* publishing.
 
 ## Git
 
