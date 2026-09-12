@@ -86,7 +86,7 @@ const settled = (await rpc("state_getStorage", [wh.usedNullifierStorageKey(nulli
 const publicBatch = await wh.aggregatePublicBatch(privateBatches, aggregatorAddress);
 ```
 
-[`examples/wormhole.mjs`](https://github.com/Quantus-Network/quantus-wasm/blob/main/examples/wormhole.mjs) runs the wallet loop against a live node (`npm run wormhole -- deposit --amount ...`, then `npm run wormhole -- exit --leaf <index> --to <address>`).
+[`examples/wormhole.mjs`](https://github.com/Quantus-Network/quantus-wasm/blob/main/examples/wormhole.mjs) runs the wallet loop against a live node (`npm run wormhole -- deposit --amount ...`, then `npm run wormhole -- exit --leaf <index> --to <address>`). [`examples/consumer`](https://github.com/Quantus-Network/quantus-wasm/tree/main/examples/consumer) is a standalone project that uses both packages like an application: ML-DSA-87 and ML-DSA-65 accounts, deposits from each, one private batch with two exits, settlement.
 
 ## API
 

@@ -150,3 +150,5 @@ dist
 /wormhole/target
 /wormhole/native/*.node
 /wormhole/native/dist
+/examples/consumer/node_modules
+/examples/consumer/package-lock.json
