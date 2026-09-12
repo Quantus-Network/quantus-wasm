@@ -206,7 +206,7 @@ pub fn prove_leaf(i: LeafInput) -> Result<AsyncTask<ProveLeaf>> {
         positions: i
             .positions
             .iter()
-            .map(|p| u8::try_from(*p).map_err(|_| err("positions: each entry must be 0-3".into())))
+            .map(|p| (*p <= 3).then_some(*p as u8).ok_or_else(|| err("positions: each entry must be 0-3".into())))
             .collect::<Result<Vec<_>>>()?,
         exit_account_1: account_id(&i.exit_account_1, "exitAccount1").map_err(e)?,
         output_amount_1: i.output_amount_1,

@@ -95,6 +95,26 @@ function toCount(value: number | bigint, field: string): number {
   return c;
 }
 
+/**
+ * N-API converts JS numbers to Rust `u32` with ToUint32 semantics (NaN -> 0,
+ * fractions truncated, out-of-range wrapped), so every u32 is range-checked
+ * here; a bad amount must be an error, not a different amount.
+ */
+function toU32(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 0xffff_ffff) {
+    throw new TypeError(`${field} must be an integer between 0 and 4294967295`);
+  }
+  return value;
+}
+
+function toPositions(value: unknown, field: string): number[] {
+  if (!Array.isArray(value)) throw new TypeError(`${field} must be an array`);
+  return value.map((p, i) => {
+    if (typeof p !== "number" || !Number.isInteger(p) || p < 0 || p > 3) throw new TypeError(`${field}[${i}] must be an integer between 0 and 3`);
+    return p;
+  });
+}
+
 /** Leaf proofs aggregated per private batch (7 on Quantus). */
 export function numLeafProofs(): number {
   return n().numLeafProofs();
@@ -136,7 +156,7 @@ export interface WormholeMnemonicOptions {
 
 /** Secret and deposit address from a BIP39 mnemonic, as the Quantus wallets derive them. */
 export function wormholeFromMnemonic(mnemonic: string, opts: WormholeMnemonicOptions = {}): WormholeKey {
-  const a = n().wormholeFromMnemonic(mnemonic, opts.index ?? 0, opts.passphrase);
+  const a = n().wormholeFromMnemonic(mnemonic, toU32(opts.index ?? 0, "index"), opts.passphrase);
   return { secret: fromHex(a.secret as Hex), accountId: fromHex(a.accountId), address: a.address };
 }
 
@@ -167,12 +187,12 @@ export function quantize(plancks: bigint | string | number): number {
 
 /** Circuit units back to plancks. */
 export function dequantize(quantized: number): bigint {
-  return BigInt(n().dequantize(quantized));
+  return BigInt(n().dequantize(toU32(quantized, "quantized")));
 }
 
 /** Largest output the circuit allows for `inputQuantized` after the volume fee. */
 export function outputAfterFee(inputQuantized: number, feeBps: number = VOLUME_FEE_BPS): number {
-  return n().outputAfterFee(inputQuantized, feeBps);
+  return n().outputAfterFee(toU32(inputQuantized, "inputQuantized"), toU32(feeBps, "feeBps"));
 }
 
 export interface MerklePath {
@@ -236,22 +256,22 @@ export async function proveLeaf(input: LeafProofInput): Promise<LeafProof> {
     secret: toHex(secret, "secret"),
     transferCount: toCount(input.transferCount, "transferCount"),
     wormholeAddress: input.wormholeAddress === undefined ? n().wormholeAddress(secret).accountId : toAccount(input.wormholeAddress, "wormholeAddress"),
-    inputAmount: input.inputAmount,
+    inputAmount: toU32(input.inputAmount, "inputAmount"),
     blockHash: toHex(input.blockHash, "blockHash"),
-    blockNumber: input.blockNumber,
+    blockNumber: toU32(input.blockNumber, "blockNumber"),
     parentHash: toHex(input.parentHash, "parentHash"),
     stateRoot: toHex(input.stateRoot, "stateRoot"),
     extrinsicsRoot: toHex(input.extrinsicsRoot, "extrinsicsRoot"),
     digest: toHex(input.digest, "digest"),
     zkTreeRoot: toHex(input.zkTreeRoot, "zkTreeRoot"),
     sortedSiblings: input.sortedSiblings.map((level, i) => level.map((h) => toHex(h, `sortedSiblings[${i}]`))),
-    positions: input.positions,
+    positions: toPositions(input.positions, "positions"),
     exitAccount1: toAccount(input.exitAccount1, "exitAccount1"),
-    outputAmount1: input.outputAmount1,
+    outputAmount1: toU32(input.outputAmount1, "outputAmount1"),
     exitAccount2: input.exitAccount2 === undefined ? ZERO32 : toAccount(input.exitAccount2, "exitAccount2"),
-    outputAmount2: input.outputAmount2 ?? 0,
-    volumeFeeBps: input.volumeFeeBps ?? VOLUME_FEE_BPS,
-    assetId: input.assetId ?? 0,
+    outputAmount2: toU32(input.outputAmount2 ?? 0, "outputAmount2"),
+    volumeFeeBps: toU32(input.volumeFeeBps ?? VOLUME_FEE_BPS, "volumeFeeBps"),
+    assetId: toU32(input.assetId ?? 0, "assetId"),
   });
 }
 

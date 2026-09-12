@@ -34,8 +34,10 @@ jobs:
             setup: sudo apt-get update && sudo apt-get install -y musl-tools
           - target: aarch64-apple-darwin
             os: macos-latest
+          # Intel macOS: macos-13 was retired in December 2025; GitHub keeps an
+          # Intel image until the macOS 15 image retires (fall 2027).
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-15-intel
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

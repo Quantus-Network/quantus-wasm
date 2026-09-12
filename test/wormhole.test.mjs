@@ -139,3 +139,23 @@ test("settlement extrinsics and status keys match polkadot.js encodings", () => 
     xxhashAsHex("Wormhole", 128) + xxhashAsHex("UsedNullifiers", 128).slice(2) + blake2AsHex(n, 128).slice(2) + hex(n).slice(2)
   );
 });
+
+test("numeric inputs are range-checked before the native boundary", async () => {
+  // N-API would otherwise coerce with ToUint32: NaN -> 0, -1 -> 4294967295, 2**32 -> 0, 1.5 -> 1.
+  const bad = [NaN, -1, 1.5, 2 ** 32, Infinity, "1", 1n, null, undefined];
+  for (const v of bad) {
+    assert.throws(() => wh.dequantize(v), /quantized/, `dequantize(${String(v)})`);
+    assert.throws(() => wh.outputAfterFee(v), /inputQuantized/, `outputAfterFee(${String(v)})`);
+    if (v !== undefined) assert.throws(() => wh.outputAfterFee(1, v), /feeBps/, `outputAfterFee(1, ${String(v)})`);
+  }
+  assert.equal(wh.outputAfterFee(10_000, undefined), wh.outputAfterFee(10_000, wh.VOLUME_FEE_BPS));
+  assert.throws(() => wh.wormholeFromMnemonic(MNEMONIC, { index: -1 }), /index/);
+  assert.equal(wh.dequantize(0xffff_ffff), 42949672950000000000n);
+  assert.equal(wh.outputAfterFee(0xffff_ffff, 0), 0xffff_ffff);
+
+  for (const [field, value] of [["outputAmount1", NaN], ["outputAmount2", -1], ["inputAmount", 1.5], ["volumeFeeBps", 2 ** 32], ["blockNumber", "1"], ["assetId", Infinity]]) {
+    await assert.rejects(wh.proveLeaf({ ...LEAF_INPUT, [field]: value }), new RegExp(field), `${field}=${String(value)}`);
+  }
+  await assert.rejects(wh.proveLeaf({ ...LEAF_INPUT, positions: [4] }), /positions\[0\]/);
+  await assert.rejects(wh.proveLeaf({ ...LEAF_INPUT, positions: [0.5] }), /positions\[0\]/);
+});
