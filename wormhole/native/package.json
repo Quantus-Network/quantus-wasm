@@ -51,12 +51,5 @@
     "build:rust": "napi build --platform --release --js binding.js --dts binding.d.ts",
     "build:ts": "tsc -p tsconfig.json",
     "build": "npm run build:rust && npm run build:ts"
-  },
-  "optionalDependencies": {
-    "@quantus-network/wormhole-darwin-arm64": "0.0.0",
-    "@quantus-network/wormhole-darwin-x64": "0.0.0",
-    "@quantus-network/wormhole-linux-x64-gnu": "0.0.0",
-    "@quantus-network/wormhole-linux-arm64-gnu": "0.0.0",
-    "@quantus-network/wormhole-linux-x64-musl": "0.0.0"
   }
 }

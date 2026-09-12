@@ -31,8 +31,10 @@ wormhole/native/scripts/create-release.sh patch   # or: minor | major | 0.2.0
 This bumps `wormhole/native/package.json` and the platform packages, commits,
 tags `wormhole-vX.Y.Z`, pushes, and opens a GitHub Release. The release triggers
 `native.yml`: it builds every platform, verifies the tag against the package
-version, publishes the platform packages (`napi prepublish`) and then the
-package itself.
+version, publishes the platform packages (`napi prepublish`, which also writes
+the `optionalDependencies` on them into `package.json` for the publish; they are
+not committed, because `npm ci` cannot resolve them before they exist on npm)
+and then the package itself.
 
 Bump the version whenever the pinned circuit crates change: the package must
 match the circuit version the runtime verifies against.
