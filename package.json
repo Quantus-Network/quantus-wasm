@@ -24,6 +24,13 @@
   ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "dist/",
     "pkg/quantus_wasm_bg.wasm",
@@ -32,16 +39,18 @@
   ],
   "scripts": {
     "build:wasm": "wasm-pack build --release --target nodejs --out-dir pkg && rm -f pkg/.gitignore",
+    "build:native": "cd wormhole/native && npm run build",
     "build:ts": "rm -rf dist && tsc",
-    "build": "npm run build:wasm && npm run build:ts",
-    "test:rust": "cargo test",
+    "build": "npm run build:wasm && npm run build:native && npm run build:ts",
+    "test:rust": "cargo test && cargo test --manifest-path wormhole/Cargo.toml --release",
     "test:js": "node --test",
     "test": "npm run test:rust && npm run build && npm run test:js",
     "example": "node examples/usage.js",
     "wallet": "node examples/wallet.mjs",
     "prepublishOnly": "npm run build",
     "version": "node scripts/sync-cargo-version.mjs && git add Cargo.toml Cargo.lock",
-    "postversion": "git push --follow-tags && gh release create v$npm_package_version --generate-notes --verify-tag"
+    "postversion": "git push --follow-tags && gh release create v$npm_package_version --generate-notes --verify-tag",
+    "wormhole": "node examples/wormhole.mjs"
   },
   "engines": {
     "node": ">=18"
@@ -50,7 +59,9 @@
     "access": "public"
   },
   "devDependencies": {
+    "@napi-rs/cli": "^3.9.1",
     "@polkadot/api": "^16.5.6",
+    "@quantus-network/wormhole": "file:wormhole/native",
     "@types/node": "^20",
     "typescript": "^5.4"
   }

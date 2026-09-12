@@ -1,0 +1,10 @@
+# Wormhole workspace: the core library and the Node.js addon over it. Kept
+# separate from the signing crate at the repo root (different dependency set,
+# heavy build script).
+[workspace]
+members = ["core", "native"]
+resolver = "2"
+
+[profile.release]
+opt-level = 3
+codegen-units = 1

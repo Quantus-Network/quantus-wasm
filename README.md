@@ -9,6 +9,7 @@ This package is **compiled to WebAssembly from the Quantus chain's own crypto cr
 - `signCall(seed, call, params)` → sign **any** call (build it with polkadot.js, sign it here).
 - BIP39 mnemonic helpers using the canonical Quantus HD path.
 - Every function takes an optional `scheme`: `"ml-dsa-87"` (default) or `"ml-dsa-65"`.
+- Wormhole deposits and exits: see the companion package [`@quantus-network/wormhole`](wormhole/native).
 
 ## Install
 
@@ -183,6 +184,16 @@ Same as `signCall`, but keyed from a mnemonic at the given HD indices.
 
 Returns the 64-byte BIP39 seed. Use the first 32 bytes with `account` / `signTransfer` to bridge to the seed-based API.
 
+## Wormhole
+
+Private deposits and exits (the wormhole) live in the companion package [`@quantus-network/wormhole`](wormhole/native): a native Node.js addon built from the chain's circuit crates, with proving for all three layers on every core, local verification, and the settlement extrinsics. Install it only if you need the wormhole; this package stays signing-only.
+
+```bash
+npm install @quantus-network/wormhole
+```
+
+A deposit is an ordinary transfer to the wormhole address, so the two packages meet at `signTransfer(seed, { recipient: key.address, ... })`. See [`wormhole/native/README.md`](wormhole/native/README.md) and [`examples/wormhole.mjs`](examples/wormhole.mjs).
+
 ## Trust & verification
 
 Correctness is validated byte-for-byte against the canonical chain crates and frozen golden vectors (see `src/ext.rs` and `test/smoke.test.js`):
@@ -226,13 +237,15 @@ different HD account index.
 
 ## Build from source
 
-Requires the Rust toolchain, the `wasm32-unknown-unknown` target, and [`wasm-pack`](https://rustwasm.github.io/wasm-pack/).
+Requires the Rust toolchain, the `wasm32-unknown-unknown` target, and [`wasm-pack`](https://rustwasm.github.io/wasm-pack/). The repository also hosts the wormhole workspace (`wormhole/`: the core library and the napi-rs addon published as `@quantus-network/wormhole`); it builds on stable, and its build script generates the circuit verifier artifacts and proves the layer-2 padding batch, which takes a few minutes and a few GB of RAM. `npm install` links the local addon as `@quantus-network/wormhole` for the tests and examples.
 
 ```bash
 npm install
-npm run build   # wasm-pack (nodejs target) -> tsc
-npm test        # cargo test + JS golden vectors
+npm run build   # wasm-pack (signing) + napi build (wormhole) -> tsc
+npm test        # cargo test (both workspaces) + JS tests
 ```
+
+The wormhole platform packages are built by the `Native addon` workflow (see `wormhole/native/npm/`).
 
 ## Publishing
 

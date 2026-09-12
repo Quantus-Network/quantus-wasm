@@ -147,3 +147,6 @@ dist
 
 # macOS
 .DS_Store
+/wormhole/target
+/wormhole/native/*.node
+/wormhole/native/dist
