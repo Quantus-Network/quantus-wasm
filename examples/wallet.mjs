@@ -89,7 +89,13 @@ switch (command) {
   case "generate": {
     const mnemonic = mnemonicGenerate(24);
     const { address } = quantus.accountFromMnemonic(mnemonic, { account: accountIndex });
-    console.log(`mnemonic: ${mnemonic}`);
+    // SECURITY: never print the full mnemonic to stdout — terminal scrollback
+    // and shell logs persist it. Only the first and last words are echoed so
+    // the user can confirm which phrase was generated; write the phrase to a
+    // file or capture it from the generating tool instead.
+    const words = mnemonic.split(" ");
+    const masked = `${words[0]} ... ${words[words.length - 1]} (${words.length} words — full phrase intentionally NOT printed)`;
+    console.log(`mnemonic: ${masked}`);
     console.log(`address:  ${address}`);
     break;
   }
