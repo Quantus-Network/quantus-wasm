@@ -200,18 +200,32 @@ pub(crate) fn to_js_error(e: ext::Error) -> JsError {
 }
 
 fn parse_account_id(s: &str) -> Result<AccountId32, JsError> {
+    parse_account_id_checked(s).map_err(JsError::new)
+}
+
+/// Recipient parsing with plain-string errors, split out from
+/// [`parse_account_id`] so the validation is unit-testable off-wasm
+/// (`JsError::new` panics on non-wasm targets).
+fn parse_account_id_checked(s: &str) -> Result<AccountId32, &'static str> {
     let s = s.trim();
     if let Some(hexstr) = s.strip_prefix("0x") {
-        let bytes = hex::decode(hexstr).map_err(|_| JsError::new("recipient: invalid hex"))?;
+        let bytes = hex::decode(hexstr).map_err(|_| "recipient: invalid hex")?;
         let arr: [u8; 32] = bytes
             .try_into()
-            .map_err(|_| JsError::new("recipient: expected 32 bytes"))?;
+            .map_err(|_| "recipient: expected 32 bytes")?;
         Ok(AccountId32::new(arr))
     } else {
-        use sp_core::crypto::Ss58Codec;
-        AccountId32::from_ss58check_with_version(s)
-            .map(|(account, _version)| account)
-            .map_err(|_| JsError::new("recipient: invalid SS58 address"))
+        use sp_core::crypto::{Ss58AddressFormat, Ss58Codec};
+        let (account, version) = AccountId32::from_ss58check_with_version(s)
+            .map_err(|_| "recipient: invalid SS58 address")?;
+        // The SS58 prefix is the only thing distinguishing a Quantus address
+        // from the same 32-byte account encoded for another network; accepting
+        // a foreign prefix would silently sign a transfer the sender addressed
+        // using a different chain's address book.
+        if version != Ss58AddressFormat::custom(ext::SS58_PREFIX) {
+            return Err("recipient: SS58 address is not a Quantus (prefix 189) address");
+        }
+        Ok(account)
     }
 }
 
@@ -229,4 +243,29 @@ fn parse_u128(s: &str, field: &str) -> Result<u128, JsError> {
     s.trim()
         .parse::<u128>()
         .map_err(|_| JsError::new(&alloc::format!("{field}: invalid u128 decimal string")))
+}
+
+#[cfg(test)]
+mod ss58_recipient_tests {
+    use super::*;
+    use sp_core::crypto::{Ss58AddressFormat, Ss58Codec};
+
+    #[test]
+    fn parse_account_id_accepts_quantus_prefix() {
+        let account = AccountId32::new([2u8; 32]);
+        let quantus = account.to_ss58check_with_version(Ss58AddressFormat::custom(189));
+        assert_eq!(parse_account_id_checked(&quantus).unwrap(), account);
+    }
+
+    #[test]
+    fn parse_account_id_rejects_foreign_prefix() {
+        // The same 32-byte account encoded with the generic Substrate prefix
+        // (42) must not be accepted as a Quantus recipient.
+        let account = AccountId32::new([2u8; 32]);
+        let foreign = account.to_ss58check_with_version(Ss58AddressFormat::custom(42));
+        assert!(
+            parse_account_id_checked(&foreign).is_err(),
+            "foreign-prefix address {foreign} must be rejected"
+        );
+    }
 }
