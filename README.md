@@ -9,6 +9,7 @@ This package is **compiled to WebAssembly from the Quantus chain's own crypto cr
 - `signCall(seed, call, params)` → sign **any** call (build it with polkadot.js, sign it here).
 - BIP39 mnemonic helpers using the canonical Quantus HD path.
 - Every function takes an optional `scheme`: `"ml-dsa-87"` (default) or `"ml-dsa-65"`.
+- Every signature is **hedged** (FIPS 204 randomized mode), so two signings of the same inputs never share an extrinsic hash. See [Mortality, reaping and replay](#mortality-reaping-and-replay).
 
 ## Install
 
@@ -35,15 +36,32 @@ const extrinsicHex =
     signTransfer(seed, {
       recipient: "qzk1Nxai3dZD9Cn5kwGcgL6mKxsfxwqdis7kDQJ52aJS2vSn7",
       amount: 1_000_000_000_000n, // plancks
-      nonce: 0,
-      genesisHash: "0x...", // chain.getBlockHash(0)
-      specVersion: 100, // state.getRuntimeVersion()
+      keepAlive: true, // balances.transfer_keep_alive; false => transfer_allow_death
+      nonce: 0, // system_accountNextIndex(acct.address)
+      period: 64, // mortal era: valid for 64 blocks from blockNumber
+      blockHash: "0x...", // chain_getBlockHash() (current best block, as reported by the node)
+      blockNumber: 123456, // chain_getHeader(blockHash).number
+      genesisHash: "0x...", // chain_getBlockHash(0)
+      specVersion: 100, // state_getRuntimeVersion()
       transactionVersion: 1,
     })
   ).toString("hex");
 
 // await rpc("author_submitExtrinsic", [extrinsicHex]);
 ```
+
+`keepAlive` is required: `true` builds `balances.transfer_keep_alive`, `false` builds `balances.transfer_allow_death` (what earlier versions always built). There is deliberately no default, so no existing caller changes behaviour without noticing: omitting it is a type error and a runtime `TypeError`.
+
+## Mortality, reaping and replay
+
+Two properties of the chain interact badly if a signer is careless, and this package's defaults are chosen around them:
+
+- **Reaping resets the nonce.** When an account's free balance drops below the existential deposit (0.001 QTC) the account is deleted, nonce included. The next deposit recreates it with nonce 0. Sign transfers with `keepAlive: true` (`balances.transfer_keep_alive`, which fails instead of reaping the sender) unless emptying the account is the intent; `keepAlive: false` is `transfer_allow_death`. The field has no default, so the choice is always explicit.
+- **An immortal extrinsic never expires.** If the sender was reaped and re-funded, an immortal extrinsic signed earlier with nonce 0 is valid again, bytes unchanged, and anyone who saw it can resubmit it. Always sign **mortal** extrinsics: pass `period` (64 to 256 blocks is typical) plus the current best block's `blockNumber` and `blockHash`. Mortality bounds the replay window; keeping the account alive closes it.
+- **The block hash must come from the node.** Quantus hashes blocks with Poseidon. A hash computed client-side by a Blake2 codec, such as polkadot.js's `header.hash`, is a different value, and an extrinsic anchored to it fails signature verification (`BadProof`). Use `chain_getBlockHash` (`api.rpc.chain.getBlockHash()`), then `chain_getHeader(hash)` for the block number.
+- **Hedged signatures keep extrinsic hashes unique.** Without hedging, ML-DSA is deterministic: re-signing the same call with the same nonce after a reap would produce byte-identical extrinsics, and indexers that key on the extrinsic hash would see a duplicate. Every signature from this package mixes in 32 bytes of fresh platform randomness, so no two signed extrinsics are ever byte-identical. Note that hedging does not protect against replay of an *existing* extrinsic; only mortality and keep-alive do.
+
+Omitting `period` signs an immortal extrinsic and logs a one-time warning; pass `period: 0` to opt into immortal explicitly and silence it.
 
 ## Signature schemes
 
@@ -58,7 +76,7 @@ Both schemes derive the account id the same way (Poseidon hash of the public key
 
 ```ts
 const a = account(seed, { scheme: "ml-dsa-65" });
-const xt = signTransfer(seed, { scheme: "ml-dsa-65", recipient, amount, nonce, genesisHash, specVersion, transactionVersion });
+const xt = signTransfer(seed, { scheme: "ml-dsa-65", recipient, amount, keepAlive: true, nonce, period, blockNumber, blockHash, genesisHash, specVersion, transactionVersion });
 const b = accountFromMnemonic(mnemonic, { scheme: "ml-dsa-65" }); // m/44'/189189'/0'/0'/1'
 ```
 
@@ -89,28 +107,30 @@ interface TransferParams {
   scheme?: Scheme;      // signing key scheme; default "ml-dsa-87"
   recipient: string | Uint8Array; // SS58, 0x-hex 32-byte id, or raw 32 bytes
   amount: bigint | string | number; // plancks (u128)
-  assetId?: number;     // set => assets.transfer; omitted => balances.transfer_allow_death
+  keepAlive: boolean;   // required: true => balances.transfer_keep_alive; false => transfer_allow_death
+  assetId?: number;     // set => assets.transfer (keepAlive is ignored); the assets pallet is not currently on mainnet
   nonce: number | bigint;
   tip?: bigint | string | number; // default 0
-  period?: number | bigint; // mortal era length in blocks; 0/omitted => immortal
-  blockNumber?: number | bigint; // era anchor block (required for mortal eras)
+  period?: number | bigint; // mortal era length in blocks; 0 => immortal (omitted => immortal + warning)
+  blockNumber?: number | bigint; // current best block (required for mortal eras)
   genesisHash: string | Uint8Array;
-  blockHash?: string | Uint8Array; // required when period > 0
+  blockHash?: string | Uint8Array; // chain_getBlockHash(blockNumber), never a client-side header hash; required when period > 0
   specVersion: number;
   transactionVersion: number;
 }
 ```
 
 Notes:
-- **Immortal by default.** Omit `period` for an immortal transaction; the era checkpoint is the genesis hash.
-- **Mortal eras** require `period`, `blockNumber`, and `blockHash`, where `blockHash` is the hash of `blockNumber` and `blockNumber` is an era boundary for the period.
+- **Mortal eras are the expected mode.** Pass `period` plus the current best block's `blockNumber` and `blockHash`; the extrinsic is valid for `period` blocks from there. (For periods above 4096, `blockNumber` must be a multiple of `period / 4096`; the signer rejects other anchors.)
+- **`blockHash` is the node's hash** (`chain_getBlockHash`), never one computed client-side such as polkadot.js's `header.hash`; see [Mortality, reaping and replay](#mortality-reaping-and-replay).
+- **Immortal** requires an explicit `period: 0`; omitting `period` also signs immortal but logs a one-time warning. See [Mortality, reaping and replay](#mortality-reaping-and-replay).
 - Hashes accept either `0x`-hex strings or raw `Uint8Array`. Amounts accept `bigint` (recommended), decimal strings, or safe integers.
 
 ### `signCall(seed: Uint8Array, call: Call, params: CallParams): Uint8Array`
 
 Signs an **already-encoded `RuntimeCall`**, returning the SCALE-encoded v4 extrinsic. This is the generic primitive behind `signTransfer`: encode the call with polkadot.js (whose codec handles the call fine — only the 7219-byte Dilithium *signature* exceeds its limits), then sign it here.
 
-Encode the **call** directly via the registry — do **not** build a `SubmittableExtrinsic` (e.g. `api.tx.balances.transferAllowDeath(...)`), as that forces polkadot.js to instantiate the oversized signature type and throws:
+Encode the **call** directly via the registry — do **not** build a `SubmittableExtrinsic` (e.g. `api.tx.balances.transferKeepAlive(...)`), as that forces polkadot.js to instantiate the oversized signature type and throws:
 
 ```ts
 import { ApiPromise } from "@polkadot/api";
@@ -119,13 +139,20 @@ import { signCall } from "@quantus-network/wasm";
 const api = await ApiPromise.create({ provider });
 const call = api.registry
   .createType("Call", {
-    callIndex: api.tx.balances.transferAllowDeath.callIndex,
+    callIndex: api.tx.balances.transferKeepAlive.callIndex,
     args: { dest, value },
   })
   .toHex();
 
+// Quantus block hashes are Poseidon. polkadot.js's `header.hash` is a local
+// Blake2 digest and would fail CheckMortality, so take the hash from the node.
+const blockHash = await api.rpc.chain.getBlockHash();
+const header = await api.rpc.chain.getHeader(blockHash);
 const extrinsic = signCall(seed, call, {
   nonce: 0,
+  period: 64,
+  blockNumber: header.number.toNumber(),
+  blockHash: blockHash.toHex(),
   genesisHash: api.genesisHash.toHex(),
   specVersion: api.runtimeVersion.specVersion.toNumber(),
   transactionVersion: api.runtimeVersion.transactionVersion.toNumber(),
@@ -144,16 +171,16 @@ interface CallParams {
   scheme?: Scheme;      // signing key scheme; default "ml-dsa-87"
   nonce: number | bigint;
   tip?: bigint | string | number; // default 0
-  period?: number | bigint; // mortal era length in blocks; 0/omitted => immortal
-  blockNumber?: number | bigint; // era anchor block (required for mortal eras)
+  period?: number | bigint; // mortal era length in blocks; 0 => immortal (omitted => immortal + warning)
+  blockNumber?: number | bigint; // current best block (required for mortal eras)
   genesisHash: string | Uint8Array;
-  blockHash?: string | Uint8Array; // required when period > 0
+  blockHash?: string | Uint8Array; // chain_getBlockHash(blockNumber), never a client-side header hash; required when period > 0
   specVersion: number;
   transactionVersion: number;
 }
 ```
 
-The same notes about immortal/mortal eras and hash/amount input formats apply.
+The same notes about mortal/immortal eras, the node-reported `blockHash` and hash/amount input formats apply. Prefer `transfer_keep_alive` over `transfer_allow_death` when encoding balance transfers yourself, for the reasons in [Mortality, reaping and replay](#mortality-reaping-and-replay).
 
 ### `accountFromMnemonic(mnemonic: string, opts?: MnemonicOptions): QuantusAccount`
 
@@ -189,7 +216,7 @@ Correctness is validated byte-for-byte against the canonical chain crates and fr
 
 - **Addresses** match `qp-dilithium-crypto`'s `IdentifyAccount`, and reproduce known chain-spec mnemonic vectors.
 - **`Era`** encoding matches `sp-runtime::generic::Era`.
-- **Signatures** (ML-DSA-87 and ML-DSA-65) are deterministic and bound to the FIPS 204 context `QUANTUS_EXTRINSIC` (the runtime's `signing_context::EXTRINSIC`). They are frozen as golden vectors, compared byte-for-byte against `sp_core::Pair::sign` from `qp-dilithium-crypto`, and verified through the runtime's `Verify` impl after decoding the extrinsic's signature field. A signature under any other context (including none) is rejected on chain.
+- **Signatures** (ML-DSA-87 and ML-DSA-65) are hedged with 32 bytes of fresh platform randomness per signature and bound to the FIPS 204 context `QUANTUS_EXTRINSIC` (the runtime's `signing_context::EXTRINSIC`). The tests drive the same signing path without hedging to compare it byte-for-byte against `sp_core::Pair::sign` from `qp-dilithium-crypto` and against frozen golden vectors, check that hedged signatures differ while leaving every other extrinsic byte unchanged, and verify hedged extrinsics through the runtime's `Verify` impl after decoding the signature field. A signature under any other context (including none) is rejected on chain.
 - **Transaction extensions** match the runtime's `TxExtension` (CheckMortality, CheckNonce, ChargeTransactionPayment, CheckMetadataHash, and the custom Reversible/Wormhole extensions, which contribute no signed bytes).
 
 ## Examples
@@ -210,6 +237,8 @@ that talks to a live node. It uses polkadot.js only for connecting, reading
 storage (balance/nonce), and SCALE-encoding the call; this package produces the
 post-quantum signature, and the signed extrinsic is submitted via raw
 `author_submitExtrinsic` (it is too large for polkadot.js to re-decode).
+[`examples/chain-context.mjs`](examples/chain-context.mjs) shows how to read the
+mortal-era anchor and the rest of the chain context from the node.
 
 ```bash
 export MNEMONIC="your twelve or twenty-four word phrase"

@@ -5,6 +5,14 @@
  * (`qp-poseidon-core`, `qp-rusty-crystals-dilithium`). No cryptography or
  * extrinsic encoding is reimplemented here; this layer only marshals JS types
  * (bigint, hex, Uint8Array) across the wasm boundary.
+ *
+ * Why every signature is hedged (FIPS 204 randomized mode, always on):
+ * ML-DSA is deterministic without hedging, so re-signing the same call with the
+ * same nonce (which happens after an account is reaped and re-funded, resetting
+ * its nonce to 0) would produce byte-identical extrinsics and therefore identical
+ * extrinsic hashes, which indexers and exchanges key on. Mixing 32 fresh random
+ * bytes into each signature makes every signed extrinsic unique. It also removes
+ * the known-mask fault attacks that deterministic ML-DSA signing is exposed to.
  */
 import * as wasm from "../pkg/quantus_wasm.js";
 
@@ -51,12 +59,23 @@ export interface CallParams {
   nonce: number | bigint;
   /** Tip in plancks; defaults to 0. */
   tip?: Amount;
-  /** Mortal era period in blocks; `0`/omitted means immortal. */
+  /**
+   * Mortal era period in blocks (64 to 256 is typical). Mortal eras are the
+   * expected mode: pass the current best block as `blockNumber`/`blockHash`.
+   * `0` signs an immortal extrinsic, which stays valid forever and can be
+   * replayed if the signer account is ever reaped and re-funded (its nonce
+   * resets). Omitting `period` also signs immortal, with a one-time warning.
+   */
   period?: number | bigint;
-  /** Reference block number the mortal era is anchored to. */
+  /** Block the mortal era is anchored to (the current best block). */
   blockNumber?: number | bigint;
   genesisHash: Hash;
-  /** Required for mortal eras (period > 0). */
+  /**
+   * Hash of `blockNumber` as reported by the node (`chain_getBlockHash`);
+   * required for mortal eras (period > 0). Quantus block hashes are Poseidon,
+   * so a hash computed client-side (e.g. polkadot.js's Blake2 `header.hash`)
+   * does not match and the extrinsic is rejected.
+   */
   blockHash?: Hash;
   specVersion: number;
   transactionVersion: number;
@@ -65,8 +84,34 @@ export interface CallParams {
 export interface TransferParams extends CallParams {
   recipient: Recipient;
   amount: Amount;
-  /** When set, builds an `assets.transfer`; otherwise `balances.transfer_allow_death`. */
+  /**
+   * When set, builds an `assets.transfer`; otherwise a balances transfer.
+   * The assets pallet is not currently on mainnet (its pallet index is vacant),
+   * so such an extrinsic is rejected there.
+   */
   assetId?: number;
+  /**
+   * Required, no default. `true` builds `balances.transfer_keep_alive`, which
+   * fails instead of letting the sender drop below the existential deposit.
+   * `false` builds `balances.transfer_allow_death`: the sender can be reaped,
+   * which resets its nonce to 0 and makes earlier immortal extrinsics
+   * replayable. Earlier versions always built `transfer_allow_death`; the choice
+   * is explicit now so no caller changes behaviour silently. Ignored for asset
+   * transfers.
+   */
+  keepAlive: boolean;
+}
+
+let warnedImmortal = false;
+
+function warnImmortalOnce(): void {
+  if (warnedImmortal) return;
+  warnedImmortal = true;
+  console.warn(
+    "@quantus-network/wasm: signing an immortal extrinsic because `period` was omitted. " +
+      "An immortal extrinsic never expires and can be replayed if the signer is reaped and re-funded. " +
+      "Pass `period`, `blockNumber` and `blockHash` for a mortal era, or `period: 0` to silence this warning."
+  );
 }
 
 const SEED_BYTES = 32;
@@ -257,6 +302,7 @@ export function signCallFromMnemonic(
  * mnemonic options win when both are given, since they select the key.
  */
 function encodeContext(params: CallParams, scheme?: Scheme): Record<string, unknown> {
+  if (params.period === undefined) warnImmortalOnce();
   const period = params.period === undefined ? 0 : toNumber(params.period, "period");
   if (period > 0 && params.blockHash === undefined) {
     throw new TypeError("blockHash is required for mortal eras (period > 0)");
@@ -276,10 +322,16 @@ function encodeContext(params: CallParams, scheme?: Scheme): Record<string, unkn
 }
 
 function encodeTransfer(params: TransferParams, scheme?: Scheme): Record<string, unknown> {
+  if (typeof params.keepAlive !== "boolean") {
+    throw new TypeError(
+      "keepAlive is required: true builds balances.transfer_keep_alive, false builds balances.transfer_allow_death"
+    );
+  }
   return {
     recipient: toRecipient(params.recipient),
     amount: toDecimal(params.amount, "amount"),
     assetId: params.assetId,
+    keepAlive: params.keepAlive,
     ...encodeContext(params, scheme),
   };
 }

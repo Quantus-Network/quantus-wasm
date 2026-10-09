@@ -14,6 +14,7 @@ import { parseArgs } from "node:util";
 import { ApiPromise, HttpProvider } from "@polkadot/api";
 import { mnemonicGenerate } from "@polkadot/util-crypto";
 import * as quantus from "../dist/index.js";
+import { chainContext } from "./chain-context.mjs";
 
 const DEFAULT_RPC = "https://a1-planck.quantus.cat";
 
@@ -125,22 +126,19 @@ switch (command) {
     const { nonce } = await api.query.system.account(sender.address);
     // Encode the call directly: building a SubmittableExtrinsic would force
     // polkadot.js to instantiate the 7219-byte Dilithium signature type (> its
-    // 2048 array cap) and throw.
+    // 2048 array cap) and throw. transfer_keep_alive refuses to reap the sender.
     const call = api.registry
       .createType("Call", {
-        callIndex: api.tx.balances.transferAllowDeath.callIndex,
+        callIndex: api.tx.balances.transferKeepAlive.callIndex,
         args: { dest: to, value: amount },
       })
       .toHex();
     const extrinsic = quantus.signCallFromMnemonic(
       mnemonic,
       call,
-      {
-        nonce: nonce.toNumber(),
-        genesisHash: api.genesisHash.toHex(),
-        specVersion: api.runtimeVersion.specVersion.toNumber(),
-        transactionVersion: api.runtimeVersion.transactionVersion.toNumber(),
-      },
+      // Mortal era anchored at the current best block, valid for 64 blocks.
+      // chainContext takes the block hash from the node; see chain-context.mjs.
+      { nonce: nonce.toNumber(), ...(await chainContext(api)) },
       { account: accountIndex }
     );
     await api.disconnect();

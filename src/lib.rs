@@ -5,7 +5,8 @@
 //! - [`signTransfer`]: 32-byte seed + transfer params -> signed v4 extrinsic bytes.
 //!
 //! Every entry point takes an optional `scheme` (`"ml-dsa-87"`, the default, or
-//! `"ml-dsa-65"`) selecting the signing key type.
+//! `"ml-dsa-65"`) selecting the signing key type. All signatures are hedged with
+//! fresh platform randomness (see [`ext`]).
 
 extern crate alloc;
 use alloc::string::String;
@@ -118,6 +119,8 @@ struct JsTransferParams {
     /// Optional asset id; when present an `assets.transfer` is built.
     #[serde(default)]
     asset_id: Option<u32>,
+    /// `balances.transfer_keep_alive` (`true`) vs `transfer_allow_death`; required.
+    keep_alive: bool,
     #[serde(flatten)]
     ctx: JsSignContext,
 }
@@ -160,6 +163,7 @@ pub(crate) fn build_transfer_params(
             recipient: parse_account_id(&p.recipient)?,
             amount: parse_u128(&p.amount, "amount")?,
             asset_id: p.asset_id,
+            keep_alive: p.keep_alive,
             ctx,
         },
         scheme,

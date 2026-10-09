@@ -5,6 +5,11 @@
 //! ML-DSA-87 and ML-DSA-65). The SCALE envelope (era, address tag, signature tag, extrinsic
 //! framing) mirrors the runtime's `UncheckedExtrinsic`/`TxExtension`; every byte
 //! is validated against `sp-runtime`/`qp-dilithium-crypto` in the tests below.
+//!
+//! Every signature is hedged (FIPS 204 randomized mode): signing the same payload
+//! twice yields different signature bytes, so two extrinsics never share a hash
+//! even when nonce, call and era repeat (e.g. after an account was reaped and
+//! re-funded, which resets its nonce).
 
 extern crate alloc;
 use alloc::string::String;
@@ -33,6 +38,8 @@ const PAYLOAD_HASH_THRESHOLD: usize = 256;
 // golden-vector tests so a runtime reshuffle surfaces immediately.
 const BALANCES_PALLET: u8 = 2;
 const BALANCES_TRANSFER_ALLOW_DEATH: u8 = 0;
+const BALANCES_TRANSFER_KEEP_ALIVE: u8 = 3;
+// The assets pallet is not currently on mainnet; index 17 is kept vacant there.
 const ASSETS_PALLET: u8 = 17;
 const ASSETS_TRANSFER: u8 = 8;
 
@@ -45,16 +52,19 @@ pub enum Error {
     /// A mortal era was requested whose checkpoint block hash cannot be the
     /// supplied `block_hash`; the caller must anchor to an era boundary.
     InvalidMortality,
+    /// The platform CSPRNG could not supply hedging randomness.
+    RngFailed,
 }
 
 impl Error {
     pub fn message(self) -> &'static str {
         match self {
             Error::InvalidSeed => "seed must be at least 32 bytes",
-            Error::SigningFailed => "ML-DSA-87 signing failed",
+            Error::SigningFailed => "ML-DSA signing failed",
             Error::InvalidMortality => {
                 "block_number is not an era boundary for this period; pass the era checkpoint block"
             }
+            Error::RngFailed => "system randomness unavailable; hedged signing needs a CSPRNG",
         }
     }
 }
@@ -150,14 +160,27 @@ impl Keypair {
         }
     }
 
-    /// Sign `msg` under [`SIGNING_CONTEXT`], as the runtime's `Pair::sign` does.
-    fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, Error> {
+    /// Sign `msg` under [`SIGNING_CONTEXT`]. `hedge` is the FIPS 204 hedging
+    /// randomness: `Some` makes every signature unique, `None` is deterministic
+    /// (what the runtime's `Pair::sign` does; kept only for golden vectors).
+    fn sign(&self, msg: &[u8], hedge: Option<&SensitiveBytes32>) -> Result<Vec<u8>, Error> {
         match self {
-            Keypair::MlDsa87(k) => k.sign(msg, Some(SIGNING_CONTEXT), None).map(|s| s.to_vec()),
-            Keypair::MlDsa65(k) => k.sign(msg, Some(SIGNING_CONTEXT), None).map(|s| s.to_vec()),
+            Keypair::MlDsa87(k) => k
+                .sign(msg, Some(SIGNING_CONTEXT), hedge)
+                .map(|s| s.to_vec()),
+            Keypair::MlDsa65(k) => k
+                .sign(msg, Some(SIGNING_CONTEXT), hedge)
+                .map(|s| s.to_vec()),
         }
         .map_err(|_| Error::SigningFailed)
     }
+}
+
+/// 32 bytes of fresh CSPRNG output for one hedged signature.
+fn fresh_hedge() -> Result<SensitiveBytes32, Error> {
+    let mut hedge = SensitiveBytes32::zeroed();
+    getrandom::getrandom(hedge.as_mut_bytes()).map_err(|_| Error::RngFailed)?;
+    Ok(hedge)
 }
 
 /// Derived account material for a 32-byte seed.
@@ -189,8 +212,12 @@ pub struct SignContext {
 pub struct TransferParams {
     pub recipient: AccountId32,
     pub amount: u128,
-    /// `Some(id)` builds an `assets.transfer`; `None` builds `balances.transfer_allow_death`.
+    /// `Some(id)` builds an `assets.transfer`; `None` builds a balances transfer.
     pub asset_id: Option<u32>,
+    /// `balances.transfer_keep_alive` (fails rather than reaping the sender) vs
+    /// `balances.transfer_allow_death`. Deliberately no default. Ignored for
+    /// asset transfers.
+    pub keep_alive: bool,
     pub ctx: SignContext,
 }
 
@@ -230,13 +257,23 @@ pub fn sign_call(
     sign_call_with_keypair(&Keypair::from_seed(seed, scheme)?, call, ctx)
 }
 
-/// [`sign_call`] with an already-derived keypair (seed or HD mnemonic path). This
-/// is the single place the signed extrinsic is assembled; `sign_transfer` builds
-/// the call bytes and delegates here.
+/// [`sign_call`] with an already-derived keypair (seed or HD mnemonic path).
+/// `sign_transfer` builds the call bytes and delegates here. Always hedged.
 pub fn sign_call_with_keypair(
     keypair: &Keypair,
     call: &[u8],
     ctx: &SignContext,
+) -> Result<Vec<u8>, Error> {
+    assemble_extrinsic(keypair, call, ctx, Some(&fresh_hedge()?))
+}
+
+/// The single place the signed extrinsic is assembled. `hedge: None` is the
+/// deterministic path, used only by the golden-vector tests.
+fn assemble_extrinsic(
+    keypair: &Keypair,
+    call: &[u8],
+    ctx: &SignContext,
+    hedge: Option<&SensitiveBytes32>,
 ) -> Result<Vec<u8>, Error> {
     let public_key = keypair.public_key();
     let account = account_id_from_public(&public_key);
@@ -253,7 +290,7 @@ pub fn sign_call_with_keypair(
     payload.extend_from_slice(&extra);
     payload.extend_from_slice(&implicit);
 
-    let signature = sign_payload(keypair, &payload)?;
+    let signature = sign_payload(keypair, &payload, hedge)?;
 
     // DilithiumSignatureScheme::<variant>(sig || public) encoding.
     let mut signature_field = Vec::with_capacity(1 + signature.len() + public_key.len());
@@ -287,11 +324,15 @@ pub fn sign_transfer_with_keypair(keypair: &Keypair, p: &TransferParams) -> Resu
     sign_call_with_keypair(keypair, &encode_call(p), &p.ctx)
 }
 
-fn sign_payload(keypair: &Keypair, payload: &[u8]) -> Result<Vec<u8>, Error> {
+fn sign_payload(
+    keypair: &Keypair,
+    payload: &[u8],
+    hedge: Option<&SensitiveBytes32>,
+) -> Result<Vec<u8>, Error> {
     if payload.len() > PAYLOAD_HASH_THRESHOLD {
-        keypair.sign(&blake2_256(payload))
+        keypair.sign(&blake2_256(payload), hedge)
     } else {
-        keypair.sign(payload)
+        keypair.sign(payload, hedge)
     }
 }
 
@@ -306,7 +347,11 @@ fn encode_call(p: &TransferParams) -> Vec<u8> {
     match p.asset_id {
         None => {
             call.push(BALANCES_PALLET);
-            call.push(BALANCES_TRANSFER_ALLOW_DEATH);
+            call.push(if p.keep_alive {
+                BALANCES_TRANSFER_KEEP_ALIVE
+            } else {
+                BALANCES_TRANSFER_ALLOW_DEATH
+            });
             encode_address(&p.recipient, &mut call);
             Compact(p.amount).encode_to(&mut call);
         }
@@ -470,8 +515,25 @@ mod tests {
             recipient: AccountId32::new([2u8; 32]),
             amount: 12_345_000_000_000,
             asset_id,
+            keep_alive: true,
             ctx: sample_ctx(),
         }
+    }
+
+    fn sig_len(scheme: Scheme) -> usize {
+        match scheme {
+            Scheme::MlDsa87 => ml_dsa_87::SIGNBYTES,
+            Scheme::MlDsa65 => ml_dsa_65::SIGNBYTES,
+        }
+    }
+
+    /// A signed extrinsic with the ML-DSA signature bytes cut out: everything
+    /// hedging must leave untouched.
+    fn without_signature(xt: &[u8], scheme: Scheme) -> Vec<u8> {
+        let mut body = xt;
+        <Compact<u32>>::decode(&mut body).unwrap();
+        let sig_start = 1 + 33 + 1;
+        [&body[..sig_start], &body[sig_start + sig_len(scheme)..]].concat()
     }
 
     #[test]
@@ -557,16 +619,16 @@ mod tests {
 
     #[test]
     fn signature_matches_canonical_pair_and_is_context_bound() {
-        // Same seed + message must give the exact bytes `sp_core::Pair::sign`
-        // produces in the runtime crate (which applies the EXTRINSIC context), and
-        // the same SCALE signature field. Verification under the empty
-        // (pre-context) or any other context must fail.
+        // Unhedged, the same seed + message must give the exact bytes
+        // `sp_core::Pair::sign` produces in the runtime crate (which applies the
+        // EXTRINSIC context), and the same SCALE signature field. Verification
+        // under the empty (pre-context) or any other context must fail.
         let seed = [3u8; 32];
         let msg = b"quantus signing payload";
         for scheme in SCHEMES {
             let keypair = Keypair::from_seed(&seed, scheme).unwrap();
             let public_key = keypair.public_key();
-            let sig = sign_payload(&keypair, msg).unwrap();
+            let sig = sign_payload(&keypair, msg, None).unwrap();
             let theirs = canonical(&seed, scheme, msg);
             assert_eq!(sig, theirs.signature, "{scheme:?}");
 
@@ -596,10 +658,11 @@ mod tests {
 
     #[test]
     fn signature_is_deterministic_known_value() {
-        // ML-DSA signing is deterministic when no hedge entropy is supplied, so a
-        // fixed (seed, message) yields a fixed signature. Frozen here as golden
-        // vectors: a dependency bump that changes the signature bytes (and would
-        // silently break on-chain verification) fails this test.
+        // Without hedge entropy ML-DSA signing is deterministic, so a fixed
+        // (seed, message) yields a fixed signature. Frozen here as golden vectors:
+        // a dependency bump that changes the signature bytes (and would silently
+        // break on-chain verification) fails this test. Production signing always
+        // hedges; see `hedged_signatures_are_unique_and_verify`.
         let seed = [7u8; 32];
         let message = b"quantus deterministic signature vector";
         for (scheme, expected) in [
@@ -613,9 +676,9 @@ mod tests {
             ),
         ] {
             let keypair = Keypair::from_seed(&seed, scheme).unwrap();
-            let sig = sign_payload(&keypair, message).unwrap();
+            let sig = sign_payload(&keypair, message, None).unwrap();
             let sig_again =
-                sign_payload(&Keypair::from_seed(&seed, scheme).unwrap(), message).unwrap();
+                sign_payload(&Keypair::from_seed(&seed, scheme).unwrap(), message, None).unwrap();
             assert_eq!(sig, sig_again);
             assert_eq!(hex::encode(blake2_256(&sig)), expected, "{scheme:?}");
             assert!(verify_with_context(
@@ -671,12 +734,52 @@ mod tests {
     }
 
     #[test]
+    fn hedged_signatures_are_unique_and_verify() {
+        // The public path hedges every signature: identical inputs give
+        // different signature bytes (so different extrinsic hashes), while
+        // everything around the signature is identical and each one verifies.
+        let seed = [0u8; 32];
+        let p = sample_params(None);
+        for scheme in SCHEMES {
+            let keys = derive_account(&seed, scheme).unwrap();
+            let a = sign_transfer(&seed, scheme, &p).unwrap();
+            let b = sign_transfer(&seed, scheme, &p).unwrap();
+            assert_eq!(a.len(), b.len());
+            assert_ne!(a, b, "{scheme:?}");
+            assert_eq!(without_signature(&a, scheme), without_signature(&b, scheme));
+
+            let msg = b"hedged";
+            let keypair = Keypair::from_seed(&seed, scheme).unwrap();
+            let sig_a = sign_payload(&keypair, msg, Some(&fresh_hedge().unwrap())).unwrap();
+            let sig_b = sign_payload(&keypair, msg, Some(&fresh_hedge().unwrap())).unwrap();
+            assert_ne!(sig_a, sig_b);
+            for sig in [&sig_a, &sig_b] {
+                assert!(verify_with_context(
+                    scheme,
+                    &keys.public_key,
+                    msg,
+                    sig,
+                    SIGNING_CONTEXT
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn pallet_indices() {
-        let bal = encode_call(&sample_params(None));
+        let keep_alive = encode_call(&sample_params(None));
         assert_eq!(
-            (bal[0], bal[1]),
+            (keep_alive[0], keep_alive[1]),
+            (BALANCES_PALLET, BALANCES_TRANSFER_KEEP_ALIVE)
+        );
+        let mut allow_death_params = sample_params(None);
+        allow_death_params.keep_alive = false;
+        let allow_death = encode_call(&allow_death_params);
+        assert_eq!(
+            (allow_death[0], allow_death[1]),
             (BALANCES_PALLET, BALANCES_TRANSFER_ALLOW_DEATH)
         );
+        assert_eq!(keep_alive[2..], allow_death[2..]);
         let asset = encode_call(&sample_params(Some(42)));
         assert_eq!((asset[0], asset[1]), (ASSETS_PALLET, ASSETS_TRANSFER));
     }
@@ -684,14 +787,23 @@ mod tests {
     #[test]
     fn sign_call_matches_sign_transfer() {
         // The generic call signer and the transfer convenience must produce the
-        // exact same extrinsic for the same call bytes + context.
+        // same extrinsic for the same call bytes + context, up to the hedged
+        // signature bytes.
         let seed = [0u8; 32];
         let p = sample_params(None);
         let call = encode_call(&p);
         for scheme in SCHEMES {
             let via_transfer = sign_transfer(&seed, scheme, &p).unwrap();
             let via_call = sign_call(&seed, scheme, &call, &p.ctx).unwrap();
-            assert_eq!(via_transfer, via_call);
+            assert_eq!(
+                without_signature(&via_transfer, scheme),
+                without_signature(&via_call, scheme)
+            );
+            let keypair = Keypair::from_seed(&seed, scheme).unwrap();
+            assert_eq!(
+                assemble_extrinsic(&keypair, &call, &p.ctx, None).unwrap(),
+                assemble_extrinsic(&keypair, &encode_call(&p), &p.ctx, None).unwrap()
+            );
         }
     }
 }

@@ -1,6 +1,5 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createHash } = require("node:crypto");
 const {
   account,
   signTransfer,
@@ -19,6 +18,28 @@ const CRYSTAL_ALICE_ACCOUNT_ID =
 
 const hex = (u8) => Buffer.from(u8).toString("hex");
 
+// Signature length per DilithiumSignatureScheme variant byte.
+const SIG_LEN = { 0: 4627, 1: 3309 };
+
+// Signed v4 extrinsic = compact(len) | 0x84 | address(33) | variant | sig | pub | extra | call.
+// Hedging changes only `sig`; everything else is the envelope callers can compare.
+function split(xt) {
+  const cp = xt[0] & 0b11 ? 2 : 1;
+  const sigStart = cp + 1 + 33 + 1;
+  const sigLen = SIG_LEN[xt[cp + 1 + 33]];
+  return {
+    sig: xt.subarray(sigStart, sigStart + sigLen),
+    envelope: Buffer.concat([xt.subarray(0, sigStart), xt.subarray(sigStart + sigLen)]),
+  };
+}
+const envelope = (xt) => split(xt).envelope;
+const callBytes = (xt, callLen) => hex(xt.subarray(xt.length - callLen));
+
+// balances.transfer_keep_alive(MultiAddress::Id(crystal_alice), 1000):
+// pallet 2, call 3, 0x00 (Id), 32-byte account, compact(1000)=0xa10f.
+const KEEP_ALIVE_CALL = "0x020300" + CRYSTAL_ALICE_ACCOUNT_ID + "a10f";
+const ALLOW_DEATH_CALL = "0x020000" + CRYSTAL_ALICE_ACCOUNT_ID + "a10f";
+
 test("account matches the crystal_alice golden vector", () => {
   const a = account(CRYSTAL_ALICE_SEED);
   assert.equal(a.address, CRYSTAL_ALICE_ADDRESS);
@@ -35,6 +56,7 @@ test("account rejects malformed seeds", () => {
 test("signTransfer produces a signed v4 balances extrinsic", () => {
   const xt = signTransfer(CRYSTAL_ALICE_SEED, {
     recipient: "0x" + "02".repeat(32),
+    keepAlive: true,
     amount: 12_345_000_000_000n,
     nonce: 7,
     period: 64,
@@ -53,61 +75,124 @@ test("signTransfer produces a signed v4 balances extrinsic", () => {
   assert.ok(xt.length > 7200);
 });
 
-test("signTransfer is deterministic (frozen golden extrinsic)", () => {
-  // ML-DSA-87 signing is deterministic, so fixed inputs => fixed bytes. Freezing
-  // the whole signed extrinsic catches any regression in the signing pipeline.
-  const xt = signTransfer(CRYSTAL_ALICE_SEED, {
+test("omitting period warns once; period: 0 is an explicit, silent immortal", () => {
+  const warnings = [];
+  const original = console.warn;
+  console.warn = (msg) => warnings.push(msg);
+  try {
+    const params = {
+      recipient: CRYSTAL_ALICE_ADDRESS,
+      keepAlive: true,
+      amount: 1n,
+      nonce: 0,
+      genesisHash: "0x" + "00".repeat(32),
+      specVersion: 100,
+      transactionVersion: 1,
+    };
+    signTransfer(CRYSTAL_ALICE_SEED, { ...params, period: 0 });
+    assert.equal(warnings.length, 0);
+    signTransfer(CRYSTAL_ALICE_SEED, params);
+    signCall(CRYSTAL_ALICE_SEED, KEEP_ALIVE_CALL, params);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /immortal/);
+  } finally {
+    console.warn = original;
+  }
+});
+
+test("signTransfer hedges every signature (unique bytes, identical envelope)", () => {
+  const params = {
     recipient: "0x" + "02".repeat(32),
+    keepAlive: true,
     amount: "1000",
     nonce: 0,
+    period: 0,
     genesisHash: "0x" + "11".repeat(32),
     specVersion: 1,
     transactionVersion: 1,
-  });
-  assert.equal(xt.length, 7297);
-  const digest = createHash("sha256").update(Buffer.from(xt)).digest("hex");
-  assert.equal(digest, "735cf187afea82dcd6c7ac255311d325a8c2c8005cb7ceef837f1ac70ebf8d07");
+  };
+  const a = signTransfer(CRYSTAL_ALICE_SEED, params);
+  const b = signTransfer(CRYSTAL_ALICE_SEED, params);
+  // 2 (compact len) + 1 (0x84) + 33 (address) + 1 (variant) + 4627 (sig) + 2592 (pub) + 4 (extra) + 37 (call).
+  assert.equal(a.length, 7297);
+  assert.equal(b.length, 7297);
+  assert.notDeepEqual(split(a).sig, split(b).sig);
+  assert.deepEqual(envelope(a), envelope(b));
 });
 
 test("signTransfer accepts bigint/string amounts and assetId", () => {
   const base = {
     recipient: CRYSTAL_ALICE_ADDRESS,
+    keepAlive: true,
     nonce: 0,
+    period: 0,
     genesisHash: "0x" + "00".repeat(32),
     specVersion: 100,
     transactionVersion: 1,
   };
   const a = signTransfer(CRYSTAL_ALICE_SEED, { ...base, amount: 1000n });
   const b = signTransfer(CRYSTAL_ALICE_SEED, { ...base, amount: "1000" });
-  assert.deepEqual(a, b);
+  assert.deepEqual(envelope(a), envelope(b));
 
   const asset = signTransfer(CRYSTAL_ALICE_SEED, { ...base, amount: 1000n, assetId: 42 });
-  const cp = asset[0] & 0b11 ? 2 : 1;
-  // assets pallet (17) + transfer (8) appear after version+address+signature.
-  assert.notDeepEqual(asset, a);
+  // assets pallet (17) + transfer (8) + compact(42) + MultiAddress::Id + compact(1000).
+  assert.equal(callBytes(asset, 38), "1108a800" + CRYSTAL_ALICE_ACCOUNT_ID + "a10f");
+});
+
+test("keepAlive is required: true builds transfer_keep_alive, false transfer_allow_death", () => {
+  const params = {
+    recipient: CRYSTAL_ALICE_ADDRESS,
+    keepAlive: true,
+    amount: 1000n,
+    nonce: 0,
+    period: 0,
+    genesisHash: "0x" + "00".repeat(32),
+    specVersion: 100,
+    transactionVersion: 1,
+  };
+  assert.equal(callBytes(signTransfer(CRYSTAL_ALICE_SEED, params), 37), KEEP_ALIVE_CALL.slice(2));
+  assert.equal(
+    callBytes(signTransfer(CRYSTAL_ALICE_SEED, { ...params, keepAlive: true }), 37),
+    KEEP_ALIVE_CALL.slice(2)
+  );
+  assert.equal(
+    callBytes(signTransfer(CRYSTAL_ALICE_SEED, { ...params, keepAlive: false }), 37),
+    ALLOW_DEATH_CALL.slice(2)
+  );
+  // No default: earlier versions always built transfer_allow_death, so a caller
+  // that has not chosen must fail rather than silently change behaviour.
+  for (const keepAlive of [undefined, "true", 1]) {
+    assert.throws(
+      () => signTransfer(CRYSTAL_ALICE_SEED, { ...params, keepAlive }),
+      /keepAlive is required/
+    );
+  }
+  assert.throws(
+    () => signTransferFromMnemonic(MNEMONIC, { ...params, keepAlive: undefined }),
+    /keepAlive is required/
+  );
 });
 
 test("signCall matches signTransfer for the equivalent encoded call", () => {
-  // balances.transfer_allow_death(MultiAddress::Id(crystal_alice), 1000):
-  // pallet 2, call 0, 0x00 (Id), 32-byte account, compact(1000)=0xa10f.
   // Mirrors what polkadot.js `tx.method.toHex()` would produce for this call.
-  const call = "0x020000" + CRYSTAL_ALICE_ACCOUNT_ID + "a10f";
   const ctx = {
     nonce: 0,
+    period: 0,
     genesisHash: "0x" + "11".repeat(32),
     specVersion: 1,
     transactionVersion: 1,
   };
-  const viaCall = signCall(CRYSTAL_ALICE_SEED, call, ctx);
+  const viaCall = signCall(CRYSTAL_ALICE_SEED, KEEP_ALIVE_CALL, ctx);
   const viaTransfer = signTransfer(CRYSTAL_ALICE_SEED, {
     recipient: CRYSTAL_ALICE_ADDRESS,
+    keepAlive: true,
     amount: 1000n,
     ...ctx,
   });
-  assert.deepEqual(viaCall, viaTransfer);
+  assert.deepEqual(envelope(viaCall), envelope(viaTransfer));
   // Accepts Uint8Array calls too (e.g. polkadot.js `tx.method.toU8a()`).
-  const callBytes = Uint8Array.from(Buffer.from(call.slice(2), "hex"));
-  assert.deepEqual(signCall(CRYSTAL_ALICE_SEED, callBytes, ctx), viaTransfer);
+  const asBytes = Uint8Array.from(Buffer.from(KEEP_ALIVE_CALL.slice(2), "hex"));
+  assert.deepEqual(envelope(signCall(CRYSTAL_ALICE_SEED, asBytes, ctx)), envelope(viaTransfer));
 });
 
 // Known chain-spec vectors (quantus_sdk/test/generate_keys_test.dart).
@@ -142,8 +227,10 @@ test("mnemonicToSeed bridges to the seed API (non-HD vector)", () => {
 test("signTransferFromMnemonic equals seed signing of the same key", () => {
   const params = {
     recipient: "qzm5QCox8Dp5A3oSXZZYHD8YoYgPz7enykZb6RPUropdCyN5h",
+    keepAlive: true,
     amount: 500n,
     nonce: 3,
+    period: 0,
     genesisHash: "0x" + "11".repeat(32),
     specVersion: 100,
     transactionVersion: 1,
@@ -157,6 +244,7 @@ test("signTransfer requires blockHash for mortal eras", () => {
   assert.throws(() =>
     signTransfer(CRYSTAL_ALICE_SEED, {
       recipient: CRYSTAL_ALICE_ADDRESS,
+      keepAlive: true,
       amount: 1n,
       nonce: 0,
       period: 64,
@@ -202,11 +290,13 @@ test("accountFromMnemonic with ML-DSA-65 matches the wallet vector", () => {
   );
 });
 
-test("signTransfer with ML-DSA-65 produces a variant-1 signed extrinsic (frozen)", () => {
+test("signTransfer with ML-DSA-65 produces a variant-1 signed extrinsic", () => {
   const params = {
     recipient: "0x" + "02".repeat(32),
+    keepAlive: true,
     amount: "1000",
     nonce: 0,
+    period: 0,
     genesisHash: "0x" + "11".repeat(32),
     specVersion: 1,
     transactionVersion: 1,
@@ -217,12 +307,15 @@ test("signTransfer with ML-DSA-65 produces a variant-1 signed extrinsic (frozen)
   assert.equal(xt[2], 0x84);
   assert.equal(xt[2 + 1 + 33], 0x01);
   assert.deepEqual(xt.subarray(4, 36), account(CRYSTAL_ALICE_SEED, { scheme: ML_DSA_65 }).accountId);
-  const digest = createHash("sha256").update(Buffer.from(xt)).digest("hex");
-  assert.equal(digest, "6cc3feaa3cf1d75e9814a67acefb124e775dbba9d699d92cc41c5c6ef3def000");
+  assert.equal(callBytes(xt, 37), "020300" + "02".repeat(32) + "a10f");
+  // Hedged: a second signing differs only in the signature bytes.
+  const again = signTransfer(CRYSTAL_ALICE_SEED, { ...params, scheme: ML_DSA_65 });
+  assert.notDeepEqual(split(again).sig, split(xt).sig);
+  assert.deepEqual(envelope(again), envelope(xt));
 
   // signCall honours the same scheme field.
-  const call = "0x020000" + "02".repeat(32) + "a10f";
-  assert.deepEqual(signCall(CRYSTAL_ALICE_SEED, call, { ...params, scheme: ML_DSA_65 }), xt);
+  const call = "0x020300" + "02".repeat(32) + "a10f";
+  assert.deepEqual(envelope(signCall(CRYSTAL_ALICE_SEED, call, { ...params, scheme: ML_DSA_65 })), envelope(xt));
   // Without the field the extrinsic is the ML-DSA-87 one.
   assert.equal(signTransfer(CRYSTAL_ALICE_SEED, params).length, 7297);
 });
@@ -232,8 +325,10 @@ test("signTransferFromMnemonic with ML-DSA-65 signs with the derived key", () =>
     MNEMONIC,
     {
       recipient: CRYSTAL_ALICE_ADDRESS,
+      keepAlive: true,
       amount: 500n,
       nonce: 3,
+      period: 0,
       genesisHash: "0x" + "11".repeat(32),
       specVersion: 100,
       transactionVersion: 1,
@@ -247,8 +342,10 @@ test("signTransferFromMnemonic with ML-DSA-65 signs with the derived key", () =>
 test("mnemonic signing takes the ML-DSA-65 default index from params.scheme too", () => {
   const params = {
     recipient: CRYSTAL_ALICE_ADDRESS,
+    keepAlive: true,
     amount: 500n,
     nonce: 3,
+    period: 0,
     genesisHash: "0x" + "11".repeat(32),
     specVersion: 100,
     transactionVersion: 1,
@@ -258,7 +355,7 @@ test("mnemonic signing takes the ML-DSA-65 default index from params.scheme too"
   const xt = signTransferFromMnemonic(MNEMONIC, params);
   assert.equal(xt[2 + 1 + 33], 0x01);
   assert.deepEqual(xt.subarray(4, 36), expected);
-  const call = "0x020000" + "02".repeat(32) + "a10f";
+  const call = "0x020300" + "02".repeat(32) + "a10f";
   const xtCall = signCallFromMnemonic(MNEMONIC, call, params);
   assert.equal(xtCall[2 + 1 + 33], 0x01);
   assert.deepEqual(xtCall.subarray(4, 36), expected);
