@@ -56,6 +56,7 @@ test("account rejects malformed seeds", () => {
 test("signTransfer produces a signed v4 balances extrinsic", () => {
   const xt = signTransfer(CRYSTAL_ALICE_SEED, {
     recipient: "0x" + "02".repeat(32),
+    keepAlive: true,
     amount: 12_345_000_000_000n,
     nonce: 7,
     period: 64,
@@ -81,6 +82,7 @@ test("omitting period warns once; period: 0 is an explicit, silent immortal", ()
   try {
     const params = {
       recipient: CRYSTAL_ALICE_ADDRESS,
+      keepAlive: true,
       amount: 1n,
       nonce: 0,
       genesisHash: "0x" + "00".repeat(32),
@@ -101,6 +103,7 @@ test("omitting period warns once; period: 0 is an explicit, silent immortal", ()
 test("signTransfer hedges every signature (unique bytes, identical envelope)", () => {
   const params = {
     recipient: "0x" + "02".repeat(32),
+    keepAlive: true,
     amount: "1000",
     nonce: 0,
     period: 0,
@@ -120,6 +123,7 @@ test("signTransfer hedges every signature (unique bytes, identical envelope)", (
 test("signTransfer accepts bigint/string amounts and assetId", () => {
   const base = {
     recipient: CRYSTAL_ALICE_ADDRESS,
+    keepAlive: true,
     nonce: 0,
     period: 0,
     genesisHash: "0x" + "00".repeat(32),
@@ -135,9 +139,10 @@ test("signTransfer accepts bigint/string amounts and assetId", () => {
   assert.equal(callBytes(asset, 38), "1108a800" + CRYSTAL_ALICE_ACCOUNT_ID + "a10f");
 });
 
-test("keepAlive defaults to transfer_keep_alive; false builds transfer_allow_death", () => {
+test("keepAlive is required: true builds transfer_keep_alive, false transfer_allow_death", () => {
   const params = {
     recipient: CRYSTAL_ALICE_ADDRESS,
+    keepAlive: true,
     amount: 1000n,
     nonce: 0,
     period: 0,
@@ -154,6 +159,18 @@ test("keepAlive defaults to transfer_keep_alive; false builds transfer_allow_dea
     callBytes(signTransfer(CRYSTAL_ALICE_SEED, { ...params, keepAlive: false }), 37),
     ALLOW_DEATH_CALL.slice(2)
   );
+  // No default: earlier versions always built transfer_allow_death, so a caller
+  // that has not chosen must fail rather than silently change behaviour.
+  for (const keepAlive of [undefined, "true", 1]) {
+    assert.throws(
+      () => signTransfer(CRYSTAL_ALICE_SEED, { ...params, keepAlive }),
+      /keepAlive is required/
+    );
+  }
+  assert.throws(
+    () => signTransferFromMnemonic(MNEMONIC, { ...params, keepAlive: undefined }),
+    /keepAlive is required/
+  );
 });
 
 test("signCall matches signTransfer for the equivalent encoded call", () => {
@@ -168,6 +185,7 @@ test("signCall matches signTransfer for the equivalent encoded call", () => {
   const viaCall = signCall(CRYSTAL_ALICE_SEED, KEEP_ALIVE_CALL, ctx);
   const viaTransfer = signTransfer(CRYSTAL_ALICE_SEED, {
     recipient: CRYSTAL_ALICE_ADDRESS,
+    keepAlive: true,
     amount: 1000n,
     ...ctx,
   });
@@ -209,6 +227,7 @@ test("mnemonicToSeed bridges to the seed API (non-HD vector)", () => {
 test("signTransferFromMnemonic equals seed signing of the same key", () => {
   const params = {
     recipient: "qzm5QCox8Dp5A3oSXZZYHD8YoYgPz7enykZb6RPUropdCyN5h",
+    keepAlive: true,
     amount: 500n,
     nonce: 3,
     period: 0,
@@ -225,6 +244,7 @@ test("signTransfer requires blockHash for mortal eras", () => {
   assert.throws(() =>
     signTransfer(CRYSTAL_ALICE_SEED, {
       recipient: CRYSTAL_ALICE_ADDRESS,
+      keepAlive: true,
       amount: 1n,
       nonce: 0,
       period: 64,
@@ -273,6 +293,7 @@ test("accountFromMnemonic with ML-DSA-65 matches the wallet vector", () => {
 test("signTransfer with ML-DSA-65 produces a variant-1 signed extrinsic", () => {
   const params = {
     recipient: "0x" + "02".repeat(32),
+    keepAlive: true,
     amount: "1000",
     nonce: 0,
     period: 0,
@@ -304,6 +325,7 @@ test("signTransferFromMnemonic with ML-DSA-65 signs with the derived key", () =>
     MNEMONIC,
     {
       recipient: CRYSTAL_ALICE_ADDRESS,
+      keepAlive: true,
       amount: 500n,
       nonce: 3,
       period: 0,
@@ -320,6 +342,7 @@ test("signTransferFromMnemonic with ML-DSA-65 signs with the derived key", () =>
 test("mnemonic signing takes the ML-DSA-65 default index from params.scheme too", () => {
   const params = {
     recipient: CRYSTAL_ALICE_ADDRESS,
+    keepAlive: true,
     amount: 500n,
     nonce: 3,
     period: 0,

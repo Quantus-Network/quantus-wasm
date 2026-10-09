@@ -61,10 +61,12 @@ const seed64 = mnemonicToSeed(mnemonic);
 console.log("seed (64b):", preview(seed64));
 console.log("first-32 address:", account(seed64.slice(0, 32)).address);
 
-console.log("\n== signTransfer(seed, params) — balances.transfer_keep_alive (default) ==");
+console.log("\n== signTransfer(seed, params) — keepAlive: true (transfer_keep_alive) ==");
+// keepAlive is required: there is no default, so every caller chooses explicitly.
 const balancesXt = signTransfer(seed, {
   recipient: hd0.address,
   amount: 1_000_000_000_000n, // plancks
+  keepAlive: true,
   nonce: 0,
   ...ctx,
 });
@@ -89,6 +91,7 @@ const assetXt = signTransfer(seed, {
   recipient: hd0.address,
   amount: "5000",
   assetId: 1,
+  keepAlive: true, // required by the API, ignored for asset transfers
   nonce: 1,
   tip: 0n,
   ...ctx,
@@ -101,6 +104,7 @@ console.log("\n== signTransfer(seed, params) — immortal era (period: 0) ==");
 const immortalXt = signTransfer(seed, {
   recipient: hd0.address,
   amount: 1_000n,
+  keepAlive: true,
   nonce: 2,
   ...ctx,
   period: 0,
@@ -119,14 +123,14 @@ console.log("call      :", call.slice(0, 12) + "…", `(${(call.length - 2) / 2}
 console.log("extrinsic :", preview(callXt, 6));
 // signCall is the generic primitive behind signTransfer: same call bytes out
 // (the signature bytes differ because every signature is hedged).
-const equivXt = signTransfer(seed, { recipient: hd0.address, amount: 1000n, nonce: 0, ...ctx });
+const equivXt = signTransfer(seed, { recipient: hd0.address, amount: 1000n, keepAlive: true, nonce: 0, ...ctx });
 const tail = (u8) => Buffer.from(u8.subarray(u8.length - 37));
 console.log("== signTransfer call bytes:", tail(callXt).equals(tail(equivXt)));
 
 console.log("\n== signTransferFromMnemonic(mnemonic, params, { account }) ==");
 const fromMnemonicXt = signTransferFromMnemonic(
   mnemonic,
-  { recipient: acct.address, amount: 42n, nonce: 0, ...ctx },
+  { recipient: acct.address, amount: 42n, keepAlive: true, nonce: 0, ...ctx },
   { account: 0 }
 );
 console.log("signer    :", hd0.address);
@@ -138,7 +142,7 @@ const acct65 = account(seed, { scheme: "ml-dsa-65" });
 console.log("address   :", acct65.address, `(${acct65.scheme}, pk ${acct65.publicKey.length} bytes)`);
 const hd65 = accountFromMnemonic(mnemonic, { scheme: "ml-dsa-65" }); // addressIndex defaults to 1
 console.log("hd address:", hd65.address);
-const xt65 = signTransfer(seed, { scheme: "ml-dsa-65", recipient: hd65.address, amount: 1000n, nonce: 0, ...ctx });
+const xt65 = signTransfer(seed, { scheme: "ml-dsa-65", recipient: hd65.address, amount: 1000n, keepAlive: true, nonce: 0, ...ctx });
 console.log("extrinsic :", preview(xt65, 6));
 
 console.log("\nAll documented functions invoked successfully.");

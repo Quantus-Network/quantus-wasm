@@ -119,9 +119,8 @@ struct JsTransferParams {
     /// Optional asset id; when present an `assets.transfer` is built.
     #[serde(default)]
     asset_id: Option<u32>,
-    /// `balances.transfer_keep_alive` (default) vs `transfer_allow_death`.
-    #[serde(default)]
-    keep_alive: Option<bool>,
+    /// `balances.transfer_keep_alive` (`true`) vs `transfer_allow_death`; required.
+    keep_alive: bool,
     #[serde(flatten)]
     ctx: JsSignContext,
 }
@@ -164,7 +163,7 @@ pub(crate) fn build_transfer_params(
             recipient: parse_account_id(&p.recipient)?,
             amount: parse_u128(&p.amount, "amount")?,
             asset_id: p.asset_id,
-            keep_alive: p.keep_alive.unwrap_or(true),
+            keep_alive: p.keep_alive,
             ctx,
         },
         scheme,

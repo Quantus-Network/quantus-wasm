@@ -86,13 +86,15 @@ export interface TransferParams extends CallParams {
    */
   assetId?: number;
   /**
-   * `true` (default) builds `balances.transfer_keep_alive`, which fails instead
-   * of letting the sender drop below the existential deposit. `false` builds
-   * `balances.transfer_allow_death`: the sender can be reaped, which resets its
-   * nonce to 0 and makes earlier immortal extrinsics replayable. Ignored for
-   * asset transfers.
+   * Required, no default. `true` builds `balances.transfer_keep_alive`, which
+   * fails instead of letting the sender drop below the existential deposit.
+   * `false` builds `balances.transfer_allow_death`: the sender can be reaped,
+   * which resets its nonce to 0 and makes earlier immortal extrinsics
+   * replayable. Earlier versions always built `transfer_allow_death`; the choice
+   * is explicit now so no caller changes behaviour silently. Ignored for asset
+   * transfers.
    */
-  keepAlive?: boolean;
+  keepAlive: boolean;
 }
 
 let warnedImmortal = false;
@@ -315,11 +317,16 @@ function encodeContext(params: CallParams, scheme?: Scheme): Record<string, unkn
 }
 
 function encodeTransfer(params: TransferParams, scheme?: Scheme): Record<string, unknown> {
+  if (typeof params.keepAlive !== "boolean") {
+    throw new TypeError(
+      "keepAlive is required: true builds balances.transfer_keep_alive, false builds balances.transfer_allow_death"
+    );
+  }
   return {
     recipient: toRecipient(params.recipient),
     amount: toDecimal(params.amount, "amount"),
     assetId: params.assetId,
-    keepAlive: params.keepAlive ?? true,
+    keepAlive: params.keepAlive,
     ...encodeContext(params, scheme),
   };
 }

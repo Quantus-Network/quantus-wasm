@@ -215,7 +215,8 @@ pub struct TransferParams {
     /// `Some(id)` builds an `assets.transfer`; `None` builds a balances transfer.
     pub asset_id: Option<u32>,
     /// `balances.transfer_keep_alive` (fails rather than reaping the sender) vs
-    /// `balances.transfer_allow_death`. Ignored for asset transfers.
+    /// `balances.transfer_allow_death`. Deliberately no default. Ignored for
+    /// asset transfers.
     pub keep_alive: bool,
     pub ctx: SignContext,
 }

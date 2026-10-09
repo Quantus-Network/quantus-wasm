@@ -36,6 +36,7 @@ const extrinsicHex =
     signTransfer(seed, {
       recipient: "qzk1Nxai3dZD9Cn5kwGcgL6mKxsfxwqdis7kDQJ52aJS2vSn7",
       amount: 1_000_000_000_000n, // plancks
+      keepAlive: true, // balances.transfer_keep_alive; false => transfer_allow_death
       nonce: 0, // system_accountNextIndex(acct.address)
       period: 64, // mortal era: valid for 64 blocks from blockNumber
       blockNumber: 123456, // chain_getHeader().number (current best block)
@@ -49,13 +50,13 @@ const extrinsicHex =
 // await rpc("author_submitExtrinsic", [extrinsicHex]);
 ```
 
-The transfer is a `balances.transfer_keep_alive` unless you pass `keepAlive: false`.
+`keepAlive` is required: `true` builds `balances.transfer_keep_alive`, `false` builds `balances.transfer_allow_death` (what earlier versions always built). There is deliberately no default, so no existing caller changes behaviour without noticing: omitting it is a type error and a runtime `TypeError`.
 
 ## Mortality, reaping and replay
 
 Two properties of the chain interact badly if a signer is careless, and this package's defaults are chosen around them:
 
-- **Reaping resets the nonce.** When an account's free balance drops below the existential deposit (0.001 QTC) the account is deleted, nonce included. The next deposit recreates it with nonce 0. `signTransfer` therefore builds `balances.transfer_keep_alive`, which fails instead of reaping the sender; pass `keepAlive: false` only when emptying the account is the intent.
+- **Reaping resets the nonce.** When an account's free balance drops below the existential deposit (0.001 QTC) the account is deleted, nonce included. The next deposit recreates it with nonce 0. Sign transfers with `keepAlive: true` (`balances.transfer_keep_alive`, which fails instead of reaping the sender) unless emptying the account is the intent; `keepAlive: false` is `transfer_allow_death`. The field has no default, so the choice is always explicit.
 - **An immortal extrinsic never expires.** If the sender was reaped and re-funded, an immortal extrinsic signed earlier with nonce 0 is valid again, bytes unchanged, and anyone who saw it can resubmit it. Always sign **mortal** extrinsics: pass `period` (64 to 256 blocks is typical) plus the current best block's `blockNumber` and `blockHash`. Mortality bounds the replay window; keeping the account alive closes it.
 - **Hedged signatures keep extrinsic hashes unique.** Without hedging, ML-DSA is deterministic: re-signing the same call with the same nonce after a reap would produce byte-identical extrinsics, and indexers that key on the extrinsic hash would see a duplicate. Every signature from this package mixes in 32 bytes of fresh platform randomness, so no two signed extrinsics are ever byte-identical. Note that hedging does not protect against replay of an *existing* extrinsic; only mortality and keep-alive do.
 
@@ -74,7 +75,7 @@ Both schemes derive the account id the same way (Poseidon hash of the public key
 
 ```ts
 const a = account(seed, { scheme: "ml-dsa-65" });
-const xt = signTransfer(seed, { scheme: "ml-dsa-65", recipient, amount, nonce, genesisHash, specVersion, transactionVersion });
+const xt = signTransfer(seed, { scheme: "ml-dsa-65", recipient, amount, keepAlive: true, nonce, period, blockNumber, blockHash, genesisHash, specVersion, transactionVersion });
 const b = accountFromMnemonic(mnemonic, { scheme: "ml-dsa-65" }); // m/44'/189189'/0'/0'/1'
 ```
 
@@ -105,7 +106,7 @@ interface TransferParams {
   scheme?: Scheme;      // signing key scheme; default "ml-dsa-87"
   recipient: string | Uint8Array; // SS58, 0x-hex 32-byte id, or raw 32 bytes
   amount: bigint | string | number; // plancks (u128)
-  keepAlive?: boolean;  // default true => balances.transfer_keep_alive; false => transfer_allow_death
+  keepAlive: boolean;   // required: true => balances.transfer_keep_alive; false => transfer_allow_death
   assetId?: number;     // set => assets.transfer (keepAlive is ignored); the assets pallet is not currently on mainnet
   nonce: number | bigint;
   tip?: bigint | string | number; // default 0
