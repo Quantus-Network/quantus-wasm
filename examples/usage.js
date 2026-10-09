@@ -7,7 +7,9 @@
 //   genesisHash       <- chain_getBlockHash(0)
 //   specVersion/txVer <- state_getRuntimeVersion
 //   nonce             <- system_accountNextIndex(address)
-//   blockHash/number  <- chain_getHeader (current best block, anchors the mortal era)
+//   blockHash         <- chain_getBlockHash() (current best block, anchors the mortal era;
+//                        Quantus block hashes are Poseidon, so never a client-side Blake2 hash)
+//   blockNumber       <- chain_getHeader(blockHash).number
 //
 // Every signature is hedged, so running this twice prints different extrinsic
 // bytes for the same inputs.

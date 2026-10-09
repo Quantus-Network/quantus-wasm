@@ -70,7 +70,12 @@ export interface CallParams {
   /** Block the mortal era is anchored to (the current best block). */
   blockNumber?: number | bigint;
   genesisHash: Hash;
-  /** Hash of `blockNumber`; required for mortal eras (period > 0). */
+  /**
+   * Hash of `blockNumber` as reported by the node (`chain_getBlockHash`);
+   * required for mortal eras (period > 0). Quantus block hashes are Poseidon,
+   * so a hash computed client-side (e.g. polkadot.js's Blake2 `header.hash`)
+   * does not match and the extrinsic is rejected.
+   */
   blockHash?: Hash;
   specVersion: number;
   transactionVersion: number;

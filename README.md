@@ -39,8 +39,8 @@ const extrinsicHex =
       keepAlive: true, // balances.transfer_keep_alive; false => transfer_allow_death
       nonce: 0, // system_accountNextIndex(acct.address)
       period: 64, // mortal era: valid for 64 blocks from blockNumber
-      blockNumber: 123456, // chain_getHeader().number (current best block)
-      blockHash: "0x...", // hash of that header
+      blockHash: "0x...", // chain_getBlockHash() (current best block, as reported by the node)
+      blockNumber: 123456, // chain_getHeader(blockHash).number
       genesisHash: "0x...", // chain_getBlockHash(0)
       specVersion: 100, // state_getRuntimeVersion()
       transactionVersion: 1,
@@ -58,6 +58,7 @@ Two properties of the chain interact badly if a signer is careless, and this pac
 
 - **Reaping resets the nonce.** When an account's free balance drops below the existential deposit (0.001 QTC) the account is deleted, nonce included. The next deposit recreates it with nonce 0. Sign transfers with `keepAlive: true` (`balances.transfer_keep_alive`, which fails instead of reaping the sender) unless emptying the account is the intent; `keepAlive: false` is `transfer_allow_death`. The field has no default, so the choice is always explicit.
 - **An immortal extrinsic never expires.** If the sender was reaped and re-funded, an immortal extrinsic signed earlier with nonce 0 is valid again, bytes unchanged, and anyone who saw it can resubmit it. Always sign **mortal** extrinsics: pass `period` (64 to 256 blocks is typical) plus the current best block's `blockNumber` and `blockHash`. Mortality bounds the replay window; keeping the account alive closes it.
+- **The block hash must come from the node.** Quantus hashes blocks with Poseidon. A hash computed client-side by a Blake2 codec, such as polkadot.js's `header.hash`, is a different value, and an extrinsic anchored to it fails signature verification (`BadProof`). Use `chain_getBlockHash` (`api.rpc.chain.getBlockHash()`), then `chain_getHeader(hash)` for the block number.
 - **Hedged signatures keep extrinsic hashes unique.** Without hedging, ML-DSA is deterministic: re-signing the same call with the same nonce after a reap would produce byte-identical extrinsics, and indexers that key on the extrinsic hash would see a duplicate. Every signature from this package mixes in 32 bytes of fresh platform randomness, so no two signed extrinsics are ever byte-identical. Note that hedging does not protect against replay of an *existing* extrinsic; only mortality and keep-alive do.
 
 Omitting `period` signs an immortal extrinsic and logs a one-time warning; pass `period: 0` to opt into immortal explicitly and silence it.
@@ -113,7 +114,7 @@ interface TransferParams {
   period?: number | bigint; // mortal era length in blocks; 0 => immortal (omitted => immortal + warning)
   blockNumber?: number | bigint; // current best block (required for mortal eras)
   genesisHash: string | Uint8Array;
-  blockHash?: string | Uint8Array; // hash of blockNumber; required when period > 0
+  blockHash?: string | Uint8Array; // chain_getBlockHash(blockNumber), never a client-side header hash; required when period > 0
   specVersion: number;
   transactionVersion: number;
 }
@@ -121,6 +122,7 @@ interface TransferParams {
 
 Notes:
 - **Mortal eras are the expected mode.** Pass `period` plus the current best block's `blockNumber` and `blockHash`; the extrinsic is valid for `period` blocks from there. (For periods above 4096, `blockNumber` must be a multiple of `period / 4096`; the signer rejects other anchors.)
+- **`blockHash` is the node's hash** (`chain_getBlockHash`), never one computed client-side such as polkadot.js's `header.hash`; see [Mortality, reaping and replay](#mortality-reaping-and-replay).
 - **Immortal** requires an explicit `period: 0`; omitting `period` also signs immortal but logs a one-time warning. See [Mortality, reaping and replay](#mortality-reaping-and-replay).
 - Hashes accept either `0x`-hex strings or raw `Uint8Array`. Amounts accept `bigint` (recommended), decimal strings, or safe integers.
 
@@ -142,12 +144,15 @@ const call = api.registry
   })
   .toHex();
 
-const header = await api.rpc.chain.getHeader();
+// Quantus block hashes are Poseidon. polkadot.js's `header.hash` is a local
+// Blake2 digest and would fail CheckMortality, so take the hash from the node.
+const blockHash = await api.rpc.chain.getBlockHash();
+const header = await api.rpc.chain.getHeader(blockHash);
 const extrinsic = signCall(seed, call, {
   nonce: 0,
   period: 64,
   blockNumber: header.number.toNumber(),
-  blockHash: header.hash.toHex(),
+  blockHash: blockHash.toHex(),
   genesisHash: api.genesisHash.toHex(),
   specVersion: api.runtimeVersion.specVersion.toNumber(),
   transactionVersion: api.runtimeVersion.transactionVersion.toNumber(),
@@ -169,13 +174,13 @@ interface CallParams {
   period?: number | bigint; // mortal era length in blocks; 0 => immortal (omitted => immortal + warning)
   blockNumber?: number | bigint; // current best block (required for mortal eras)
   genesisHash: string | Uint8Array;
-  blockHash?: string | Uint8Array; // hash of blockNumber; required when period > 0
+  blockHash?: string | Uint8Array; // chain_getBlockHash(blockNumber), never a client-side header hash; required when period > 0
   specVersion: number;
   transactionVersion: number;
 }
 ```
 
-The same notes about mortal/immortal eras and hash/amount input formats apply. Prefer `transfer_keep_alive` over `transfer_allow_death` when encoding balance transfers yourself, for the reasons in [Mortality, reaping and replay](#mortality-reaping-and-replay).
+The same notes about mortal/immortal eras, the node-reported `blockHash` and hash/amount input formats apply. Prefer `transfer_keep_alive` over `transfer_allow_death` when encoding balance transfers yourself, for the reasons in [Mortality, reaping and replay](#mortality-reaping-and-replay).
 
 ### `accountFromMnemonic(mnemonic: string, opts?: MnemonicOptions): QuantusAccount`
 
@@ -232,6 +237,8 @@ that talks to a live node. It uses polkadot.js only for connecting, reading
 storage (balance/nonce), and SCALE-encoding the call; this package produces the
 post-quantum signature, and the signed extrinsic is submitted via raw
 `author_submitExtrinsic` (it is too large for polkadot.js to re-decode).
+[`examples/chain-context.mjs`](examples/chain-context.mjs) shows how to read the
+mortal-era anchor and the rest of the chain context from the node.
 
 ```bash
 export MNEMONIC="your twelve or twenty-four word phrase"
