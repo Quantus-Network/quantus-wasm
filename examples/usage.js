@@ -7,7 +7,10 @@
 //   genesisHash       <- chain_getBlockHash(0)
 //   specVersion/txVer <- state_getRuntimeVersion
 //   nonce             <- system_accountNextIndex(address)
-//   blockHash/number  <- chain_getHeader (for mortal eras)
+//   blockHash/number  <- chain_getHeader (current best block, anchors the mortal era)
+//
+// Every signature is hedged, so running this twice prints different extrinsic
+// bytes for the same inputs.
 
 const {
   account,
@@ -29,11 +32,15 @@ const seed = new Uint8Array(32).fill(0); // == chain dev account "crystal_alice"
 const mnemonic =
   "orchard answer curve patient visual flower maze noise retreat penalty cage small earth domain scan pitch bottom crunch theme club client swap slice raven";
 
-// Shared chain context for the signing examples.
+// Shared chain context for the signing examples: a mortal era anchored at the
+// current best block (period 64 blocks).
 const ctx = {
   genesisHash: "0x" + "11".repeat(32),
   specVersion: 100,
   transactionVersion: 1,
+  period: 64,
+  blockNumber: 1000,
+  blockHash: "0x" + "22".repeat(32),
 };
 
 console.log("== account(seed) ==");
@@ -54,7 +61,7 @@ const seed64 = mnemonicToSeed(mnemonic);
 console.log("seed (64b):", preview(seed64));
 console.log("first-32 address:", account(seed64.slice(0, 32)).address);
 
-console.log("\n== signTransfer(seed, params) — immortal balances transfer ==");
+console.log("\n== signTransfer(seed, params) — balances.transfer_keep_alive (default) ==");
 const balancesXt = signTransfer(seed, {
   recipient: hd0.address,
   amount: 1_000_000_000_000n, // plancks
@@ -63,6 +70,18 @@ const balancesXt = signTransfer(seed, {
 });
 console.log("extrinsic:", preview(balancesXt, 6));
 console.log("submit    : author_submitExtrinsic([", toHex(balancesXt).slice(0, 18) + "…", "])");
+
+console.log("\n== signTransfer(seed, params) — keepAlive: false (transfer_allow_death) ==");
+// Lets the sender drop below the existential deposit and be reaped, which resets
+// its nonce to 0. Only use when emptying an account is the intent.
+const allowDeathXt = signTransfer(seed, {
+  recipient: hd0.address,
+  amount: 1_000_000_000_000n,
+  nonce: 0,
+  keepAlive: false,
+  ...ctx,
+});
+console.log("extrinsic:", preview(allowDeathXt, 6));
 
 console.log("\n== signTransfer(seed, params) — assets transfer (assetId) ==");
 const assetXt = signTransfer(seed, {
@@ -75,31 +94,33 @@ const assetXt = signTransfer(seed, {
 });
 console.log("extrinsic:", preview(assetXt, 6));
 
-console.log("\n== signTransfer(seed, params) — mortal era ==");
-const mortalXt = signTransfer(seed, {
+console.log("\n== signTransfer(seed, params) — immortal era (period: 0) ==");
+// Never expires: if the sender is ever reaped and re-funded (nonce back to 0),
+// these exact bytes become valid again and can be replayed. Prefer mortal eras.
+const immortalXt = signTransfer(seed, {
   recipient: hd0.address,
   amount: 1_000n,
   nonce: 2,
-  period: 64,
-  blockNumber: 0, // era anchor; its hash is blockHash
-  blockHash: "0x" + "22".repeat(32),
   ...ctx,
+  period: 0,
 });
-console.log("extrinsic:", preview(mortalXt, 6));
+console.log("extrinsic:", preview(immortalXt, 6));
 
 console.log("\n== signCall(seed, call, ctx) — sign an arbitrary pre-encoded call ==");
 // Build the call however you like; polkadot.js is the easy path (it can encode
 // calls fine — only the signed extrinsic exceeds its 2048-element array cap):
-//   const call = api.tx.balances.transferAllowDeath(dest, 1000).method.toHex();
-// Inlined here: balances.transfer_allow_death(hd0, 1000) =
-//   pallet 2, call 0, MultiAddress::Id (0x00) + 32-byte account + compact(1000)=0xa10f
-const call = "0x020000" + Buffer.from(hd0.accountId).toString("hex") + "a10f";
+//   const call = api.tx.balances.transferKeepAlive(dest, 1000).method.toHex();
+// Inlined here: balances.transfer_keep_alive(hd0, 1000) =
+//   pallet 2, call 3, MultiAddress::Id (0x00) + 32-byte account + compact(1000)=0xa10f
+const call = "0x020300" + Buffer.from(hd0.accountId).toString("hex") + "a10f";
 const callXt = signCall(seed, call, { nonce: 0, ...ctx });
 console.log("call      :", call.slice(0, 12) + "…", `(${(call.length - 2) / 2} bytes)`);
 console.log("extrinsic :", preview(callXt, 6));
-// signCall is the generic primitive behind signTransfer — same bytes out:
+// signCall is the generic primitive behind signTransfer: same call bytes out
+// (the signature bytes differ because every signature is hedged).
 const equivXt = signTransfer(seed, { recipient: hd0.address, amount: 1000n, nonce: 0, ...ctx });
-console.log("== signTransfer:", Buffer.from(callXt).equals(Buffer.from(equivXt)));
+const tail = (u8) => Buffer.from(u8.subarray(u8.length - 37));
+console.log("== signTransfer call bytes:", tail(callXt).equals(tail(equivXt)));
 
 console.log("\n== signTransferFromMnemonic(mnemonic, params, { account }) ==");
 const fromMnemonicXt = signTransferFromMnemonic(

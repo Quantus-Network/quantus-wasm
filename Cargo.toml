@@ -27,7 +27,10 @@ serde = { version = "1", default-features = false, features = ["derive", "alloc"
 serde-wasm-bindgen = "0.6"
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 
-# Browser/Node RNG backend so transitive getrandom users link on wasm32.
+# Hedging randomness for every ML-DSA signature (FIPS 204 hedged mode).
+getrandom = "0.2"
+
+# Browser/Node RNG backend (crypto.getRandomValues / node:crypto) on wasm32.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
 

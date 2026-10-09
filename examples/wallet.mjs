@@ -123,12 +123,13 @@ switch (command) {
 
     const api = await connect(rpc);
     const { nonce } = await api.query.system.account(sender.address);
+    const header = await api.rpc.chain.getHeader();
     // Encode the call directly: building a SubmittableExtrinsic would force
     // polkadot.js to instantiate the 7219-byte Dilithium signature type (> its
-    // 2048 array cap) and throw.
+    // 2048 array cap) and throw. transfer_keep_alive refuses to reap the sender.
     const call = api.registry
       .createType("Call", {
-        callIndex: api.tx.balances.transferAllowDeath.callIndex,
+        callIndex: api.tx.balances.transferKeepAlive.callIndex,
         args: { dest: to, value: amount },
       })
       .toHex();
@@ -137,6 +138,10 @@ switch (command) {
       call,
       {
         nonce: nonce.toNumber(),
+        // Mortal era anchored at the current best block, valid for 64 blocks.
+        period: 64,
+        blockNumber: header.number.toNumber(),
+        blockHash: header.hash.toHex(),
         genesisHash: api.genesisHash.toHex(),
         specVersion: api.runtimeVersion.specVersion.toNumber(),
         transactionVersion: api.runtimeVersion.transactionVersion.toNumber(),
