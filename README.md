@@ -263,6 +263,10 @@ npm run build   # wasm-pack (nodejs target) -> tsc
 npm test        # cargo test + JS golden vectors
 ```
 
+## Changelog
+
+See [`CHANGELOG.md`](CHANGELOG.md), which ships in the npm package, or the [GitHub Releases](https://github.com/Quantus-Network/quantus-wasm/releases) for notes with pull-request links.
+
 ## Publishing
 
 Published from CI via npm [Trusted Publishing](https://docs.npmjs.com/trusted-publishers) (OIDC) — no token or secret required. Cut a release with `scripts/create-release.sh <patch|minor|major|x.y.z>` (see [`CREATE_RELEASE.md`](CREATE_RELEASE.md)); publishing a GitHub Release triggers the `publish` workflow, which builds, tests, and runs `npm publish` with automatic provenance.

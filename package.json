@@ -28,7 +28,8 @@
     "dist/",
     "pkg/quantus_wasm_bg.wasm",
     "pkg/quantus_wasm.js",
-    "pkg/quantus_wasm.d.ts"
+    "pkg/quantus_wasm.d.ts",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build:wasm": "wasm-pack build --release --target nodejs --out-dir pkg && rm -f pkg/.gitignore",
