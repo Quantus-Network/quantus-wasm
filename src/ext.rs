@@ -39,6 +39,7 @@ const PAYLOAD_HASH_THRESHOLD: usize = 256;
 const BALANCES_PALLET: u8 = 2;
 const BALANCES_TRANSFER_ALLOW_DEATH: u8 = 0;
 const BALANCES_TRANSFER_KEEP_ALIVE: u8 = 3;
+// The assets pallet is not currently on mainnet; index 17 is kept vacant there.
 const ASSETS_PALLET: u8 = 17;
 const ASSETS_TRANSFER: u8 = 8;
 

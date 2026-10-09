@@ -84,6 +84,7 @@ const allowDeathXt = signTransfer(seed, {
 console.log("extrinsic:", preview(allowDeathXt, 6));
 
 console.log("\n== signTransfer(seed, params) — assets transfer (assetId) ==");
+// The assets pallet is not currently on mainnet; this only encodes the call.
 const assetXt = signTransfer(seed, {
   recipient: hd0.address,
   amount: "5000",

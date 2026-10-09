@@ -106,7 +106,7 @@ interface TransferParams {
   recipient: string | Uint8Array; // SS58, 0x-hex 32-byte id, or raw 32 bytes
   amount: bigint | string | number; // plancks (u128)
   keepAlive?: boolean;  // default true => balances.transfer_keep_alive; false => transfer_allow_death
-  assetId?: number;     // set => assets.transfer (keepAlive is ignored)
+  assetId?: number;     // set => assets.transfer (keepAlive is ignored); the assets pallet is not currently on mainnet
   nonce: number | bigint;
   tip?: bigint | string | number; // default 0
   period?: number | bigint; // mortal era length in blocks; 0 => immortal (omitted => immortal + warning)

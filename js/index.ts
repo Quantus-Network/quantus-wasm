@@ -79,7 +79,11 @@ export interface CallParams {
 export interface TransferParams extends CallParams {
   recipient: Recipient;
   amount: Amount;
-  /** When set, builds an `assets.transfer`; otherwise a balances transfer. */
+  /**
+   * When set, builds an `assets.transfer`; otherwise a balances transfer.
+   * The assets pallet is not currently on mainnet (its pallet index is vacant),
+   * so such an extrinsic is rejected there.
+   */
   assetId?: number;
   /**
    * `true` (default) builds `balances.transfer_keep_alive`, which fails instead
