@@ -39,6 +39,7 @@ const PAYLOAD_HASH_THRESHOLD: usize = 256;
 const BALANCES_PALLET: u8 = 2;
 const BALANCES_TRANSFER_ALLOW_DEATH: u8 = 0;
 const BALANCES_TRANSFER_KEEP_ALIVE: u8 = 3;
+const BALANCES_TRANSFER_ALL: u8 = 4;
 // The assets pallet is not currently on mainnet; index 17 is kept vacant there.
 const ASSETS_PALLET: u8 = 17;
 const ASSETS_TRANSFER: u8 = 8;
@@ -221,6 +222,16 @@ pub struct TransferParams {
     pub ctx: SignContext,
 }
 
+/// Parameters for `balances.transfer_all`: move the whole transferable balance
+/// to `recipient`. `keep_alive: true` leaves the existential deposit behind so
+/// the sender survives; `false` empties and reaps it (its nonce resets to 0).
+/// Deliberately no default.
+pub struct TransferAllParams {
+    pub recipient: AccountId32,
+    pub keep_alive: bool,
+    pub ctx: SignContext,
+}
+
 /// Quantus account id = Poseidon hash of the public key (both schemes).
 fn account_id_from_public(public_key: &[u8]) -> AccountId32 {
     AccountId32::new(hash_bytes(public_key))
@@ -324,6 +335,23 @@ pub fn sign_transfer_with_keypair(keypair: &Keypair, p: &TransferParams) -> Resu
     sign_call_with_keypair(keypair, &encode_call(p), &p.ctx)
 }
 
+/// Build a signed, SCALE-encoded v4 `balances.transfer_all` extrinsic.
+pub fn sign_transfer_all(
+    seed: &[u8],
+    scheme: Scheme,
+    p: &TransferAllParams,
+) -> Result<Vec<u8>, Error> {
+    sign_transfer_all_with_keypair(&Keypair::from_seed(seed, scheme)?, p)
+}
+
+/// [`sign_transfer_all`] with an already-derived keypair.
+pub fn sign_transfer_all_with_keypair(
+    keypair: &Keypair,
+    p: &TransferAllParams,
+) -> Result<Vec<u8>, Error> {
+    sign_call_with_keypair(keypair, &encode_transfer_all_call(p), &p.ctx)
+}
+
 fn sign_payload(
     keypair: &Keypair,
     payload: &[u8],
@@ -342,27 +370,38 @@ fn encode_address(account: &AccountId32, out: &mut Vec<u8>) {
     out.extend_from_slice(account.as_ref());
 }
 
+/// `balances.<call>(MultiAddress::Id(recipient), ..)` prefix; the caller appends
+/// the remaining arguments.
+fn balances_call(call_index: u8, recipient: &AccountId32) -> Vec<u8> {
+    let mut call = alloc::vec![BALANCES_PALLET, call_index];
+    encode_address(recipient, &mut call);
+    call
+}
+
 fn encode_call(p: &TransferParams) -> Vec<u8> {
-    let mut call = Vec::new();
-    match p.asset_id {
-        None => {
-            call.push(BALANCES_PALLET);
-            call.push(if p.keep_alive {
+    let mut call = match p.asset_id {
+        None => balances_call(
+            if p.keep_alive {
                 BALANCES_TRANSFER_KEEP_ALIVE
             } else {
                 BALANCES_TRANSFER_ALLOW_DEATH
-            });
-            encode_address(&p.recipient, &mut call);
-            Compact(p.amount).encode_to(&mut call);
-        }
+            },
+            &p.recipient,
+        ),
         Some(asset_id) => {
-            call.push(ASSETS_PALLET);
-            call.push(ASSETS_TRANSFER);
+            let mut call = alloc::vec![ASSETS_PALLET, ASSETS_TRANSFER];
             Compact(asset_id).encode_to(&mut call);
             encode_address(&p.recipient, &mut call);
-            Compact(p.amount).encode_to(&mut call);
+            call
         }
-    }
+    };
+    Compact(p.amount).encode_to(&mut call);
+    call
+}
+
+fn encode_transfer_all_call(p: &TransferAllParams) -> Vec<u8> {
+    let mut call = balances_call(BALANCES_TRANSFER_ALL, &p.recipient);
+    call.push(p.keep_alive as u8);
     call
 }
 
@@ -516,6 +555,14 @@ mod tests {
             amount: 12_345_000_000_000,
             asset_id,
             keep_alive: true,
+            ctx: sample_ctx(),
+        }
+    }
+
+    fn sample_all_params(keep_alive: bool) -> TransferAllParams {
+        TransferAllParams {
+            recipient: AccountId32::new([2u8; 32]),
+            keep_alive,
             ctx: sample_ctx(),
         }
     }
@@ -782,6 +829,27 @@ mod tests {
         assert_eq!(keep_alive[2..], allow_death[2..]);
         let asset = encode_call(&sample_params(Some(42)));
         assert_eq!((asset[0], asset[1]), (ASSETS_PALLET, ASSETS_TRANSFER));
+    }
+
+    #[test]
+    fn transfer_all_call_and_extrinsic() {
+        let seed = [0u8; 32];
+        for keep_alive in [true, false] {
+            let p = sample_all_params(keep_alive);
+            let call = encode_transfer_all_call(&p);
+            let mut expected = alloc::vec![BALANCES_PALLET, BALANCES_TRANSFER_ALL, 0u8];
+            expected.extend_from_slice(&[2u8; 32]);
+            expected.push(keep_alive as u8);
+            assert_eq!(call, expected);
+            for scheme in SCHEMES {
+                let via_all = sign_transfer_all(&seed, scheme, &p).unwrap();
+                let via_call = sign_call(&seed, scheme, &call, &p.ctx).unwrap();
+                assert_eq!(
+                    without_signature(&via_all, scheme),
+                    without_signature(&via_call, scheme)
+                );
+            }
+        }
     }
 
     #[test]

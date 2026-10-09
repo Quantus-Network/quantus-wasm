@@ -102,6 +102,18 @@ export interface TransferParams extends CallParams {
   keepAlive: boolean;
 }
 
+/** `balances.transfer_all`: move the whole transferable balance to `recipient`. */
+export interface TransferAllParams extends CallParams {
+  recipient: Recipient;
+  /**
+   * Required, no default. `true` leaves the existential deposit behind so the
+   * sender account survives (the right choice for sweeping a deposit address:
+   * its nonce keeps counting). `false` empties and reaps the sender, resetting
+   * its nonce to 0.
+   */
+  keepAlive: boolean;
+}
+
 let warnedImmortal = false;
 
 function warnImmortalOnce(): void {
@@ -267,6 +279,34 @@ export function signTransferFromMnemonic(
 }
 
 /**
+ * Sign a `balances.transfer_all` (sweep the whole transferable balance),
+ * returning the SCALE-encoded v4 extrinsic ready for `author_submitExtrinsic`.
+ */
+export function signTransferAll(seed: Uint8Array, params: TransferAllParams): Uint8Array {
+  return wasm.signTransferAll(asSeed(seed), encodeTransferAll(params));
+}
+
+/**
+ * Sign a `balances.transfer_all` from a BIP39 mnemonic using the Quantus HD path
+ * `m/44'/189189'/<account>'/<change>'/<addressIndex>'`.
+ */
+export function signTransferAllFromMnemonic(
+  mnemonic: string,
+  params: TransferAllParams,
+  opts: MnemonicOptions = {}
+): Uint8Array {
+  const scheme = opts.scheme ?? params.scheme;
+  return wasm.signTransferAllFromMnemonic(
+    mnemonic,
+    encodeTransferAll(params, scheme),
+    opts.account ?? 0,
+    opts.change ?? 0,
+    opts.addressIndex ?? defaultAddressIndex(scheme),
+    opts.passphrase
+  );
+}
+
+/**
  * Sign an arbitrary, already-encoded `RuntimeCall` (e.g. from polkadot.js
  * `api.tx.<pallet>.<method>(...).method.toU8a()` or `.toHex()`), returning the
  * SCALE-encoded v4 extrinsic ready for `author_submitExtrinsic`.
@@ -321,17 +361,33 @@ function encodeContext(params: CallParams, scheme?: Scheme): Record<string, unkn
   };
 }
 
-function encodeTransfer(params: TransferParams, scheme?: Scheme): Record<string, unknown> {
-  if (typeof params.keepAlive !== "boolean") {
-    throw new TypeError(
-      "keepAlive is required: true builds balances.transfer_keep_alive, false builds balances.transfer_allow_death"
-    );
+function requireKeepAlive(value: unknown, meaning: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new TypeError(`keepAlive is required: ${meaning}`);
   }
+  return value;
+}
+
+function encodeTransfer(params: TransferParams, scheme?: Scheme): Record<string, unknown> {
   return {
     recipient: toRecipient(params.recipient),
     amount: toDecimal(params.amount, "amount"),
     assetId: params.assetId,
-    keepAlive: params.keepAlive,
+    keepAlive: requireKeepAlive(
+      params.keepAlive,
+      "true builds balances.transfer_keep_alive, false builds balances.transfer_allow_death"
+    ),
+    ...encodeContext(params, scheme),
+  };
+}
+
+function encodeTransferAll(params: TransferAllParams, scheme?: Scheme): Record<string, unknown> {
+  return {
+    recipient: toRecipient(params.recipient),
+    keepAlive: requireKeepAlive(
+      params.keepAlive,
+      "true leaves the existential deposit so the sender survives, false empties and reaps the sender"
+    ),
     ...encodeContext(params, scheme),
   };
 }

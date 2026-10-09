@@ -1,8 +1,10 @@
 //! WASM bindings for Quantus account derivation and ML-DSA extrinsic signing.
 //!
-//! Exposes two entry points to JavaScript/TypeScript:
+//! Entry points exposed to JavaScript/TypeScript:
 //! - [`account`]: 32-byte seed -> ML-DSA keypair, Poseidon `AccountId32`, SS58 address.
 //! - [`signTransfer`]: 32-byte seed + transfer params -> signed v4 extrinsic bytes.
+//! - [`signTransferAll`]: same for `balances.transfer_all`.
+//! - [`signCall`]: sign any pre-encoded `RuntimeCall`.
 //!
 //! Every entry point takes an optional `scheme` (`"ml-dsa-87"`, the default, or
 //! `"ml-dsa-65"`) selecting the signing key type. All signatures are hedged with
@@ -125,11 +127,30 @@ struct JsTransferParams {
     ctx: JsSignContext,
 }
 
+/// `balances.transfer_all` parameters: recipient, keep-alive choice, context.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsTransferAllParams {
+    recipient: String,
+    /// `true` leaves the existential deposit behind; `false` empties and reaps
+    /// the sender. Required.
+    keep_alive: bool,
+    #[serde(flatten)]
+    ctx: JsSignContext,
+}
+
 /// Sign a balances/assets transfer, returning the SCALE-encoded v4 extrinsic.
 #[wasm_bindgen(js_name = signTransfer)]
 pub fn sign_transfer(seed: &[u8], params: JsValue) -> Result<Vec<u8>, JsError> {
     let (params, scheme) = build_transfer_params(params)?;
     ext::sign_transfer(seed, scheme, &params).map_err(to_js_error)
+}
+
+/// Sign a `balances.transfer_all`, returning the SCALE-encoded v4 extrinsic.
+#[wasm_bindgen(js_name = signTransferAll)]
+pub fn sign_transfer_all(seed: &[u8], params: JsValue) -> Result<Vec<u8>, JsError> {
+    let (params, scheme) = build_transfer_all_params(params)?;
+    ext::sign_transfer_all(seed, scheme, &params).map_err(to_js_error)
 }
 
 /// Sign an already-encoded `RuntimeCall` (e.g. polkadot.js `tx.method.toU8a()`),
@@ -151,12 +172,15 @@ pub(crate) fn parse_scheme(name: Option<&str>) -> Result<Scheme, JsError> {
     }
 }
 
+fn from_js<T: serde::de::DeserializeOwned>(value: JsValue) -> Result<T, JsError> {
+    serde_wasm_bindgen::from_value(value)
+        .map_err(|e| JsError::new(&alloc::format!("invalid params: {e}")))
+}
+
 pub(crate) fn build_transfer_params(
     params: JsValue,
 ) -> Result<(ext::TransferParams, Scheme), JsError> {
-    let p: JsTransferParams = serde_wasm_bindgen::from_value(params)
-        .map_err(|e| JsError::new(&alloc::format!("invalid params: {e}")))?;
-
+    let p: JsTransferParams = from_js(params)?;
     let (ctx, scheme) = build_sign_context(&p.ctx)?;
     Ok((
         ext::TransferParams {
@@ -170,11 +194,25 @@ pub(crate) fn build_transfer_params(
     ))
 }
 
+pub(crate) fn build_transfer_all_params(
+    params: JsValue,
+) -> Result<(ext::TransferAllParams, Scheme), JsError> {
+    let p: JsTransferAllParams = from_js(params)?;
+    let (ctx, scheme) = build_sign_context(&p.ctx)?;
+    Ok((
+        ext::TransferAllParams {
+            recipient: parse_account_id(&p.recipient)?,
+            keep_alive: p.keep_alive,
+            ctx,
+        },
+        scheme,
+    ))
+}
+
 pub(crate) fn build_sign_context_from_value(
     context: JsValue,
 ) -> Result<(ext::SignContext, Scheme), JsError> {
-    let c: JsSignContext = serde_wasm_bindgen::from_value(context)
-        .map_err(|e| JsError::new(&alloc::format!("invalid params: {e}")))?;
+    let c: JsSignContext = from_js(context)?;
     build_sign_context(&c)
 }
 

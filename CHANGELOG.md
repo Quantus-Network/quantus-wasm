@@ -2,6 +2,12 @@
 
 Notable changes to `@quantus-network/wasm`. Release notes with pull-request links are on [GitHub Releases](https://github.com/Quantus-Network/quantus-wasm/releases).
 
+## Unreleased
+
+### Added
+
+- `signTransferAll` and `signTransferAllFromMnemonic`: build and sign `balances.transfer_all`, moving the whole transferable balance to the recipient. `keepAlive` is required: `true` leaves the existential deposit so the sender survives (the sweep for deposit addresses), `false` empties and reaps the sender.
+
 ## 1.0.0 - 2026-10-09
 
 ### Breaking
