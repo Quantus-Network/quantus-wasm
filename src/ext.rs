@@ -224,7 +224,8 @@ pub struct TransferParams {
 
 /// Parameters for `balances.transfer_all`: move the whole transferable balance
 /// to `recipient`. `keep_alive: true` leaves the existential deposit behind so
-/// the sender survives; `false` empties and reaps it (its nonce resets to 0).
+/// the sender survives; `false` also moves it and lets the sender be reaped
+/// (nonce back to 0), though locks or reserves can keep the account alive.
 /// Deliberately no default.
 pub struct TransferAllParams {
     pub recipient: AccountId32,

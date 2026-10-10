@@ -108,8 +108,10 @@ export interface TransferAllParams extends CallParams {
   /**
    * Required, no default. `true` leaves the existential deposit behind so the
    * sender account survives (the right choice for sweeping a deposit address:
-   * its nonce keeps counting). `false` empties and reaps the sender, resetting
-   * its nonce to 0.
+   * its nonce keeps counting). `false` also moves the existential deposit and
+   * lets the sender be reaped (nonce back to 0). Reaping is not guaranteed:
+   * only the reducible balance moves, and locks or reserves keep the account
+   * alive.
    */
   keepAlive: boolean;
 }
@@ -386,7 +388,7 @@ function encodeTransferAll(params: TransferAllParams, scheme?: Scheme): Record<s
     recipient: toRecipient(params.recipient),
     keepAlive: requireKeepAlive(
       params.keepAlive,
-      "true leaves the existential deposit so the sender survives, false empties and reaps the sender"
+      "true leaves the existential deposit so the sender survives, false lets the sender be reaped"
     ),
     ...encodeContext(params, scheme),
   };

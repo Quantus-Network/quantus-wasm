@@ -89,7 +89,7 @@ const allowDeathXt = signTransfer(seed, {
 console.log("extrinsic:", preview(allowDeathXt, 6));
 
 console.log("\n== signTransferAll(seed, params) — sweep, keepAlive: true (transfer_all) ==");
-// Moves everything except the existential deposit, so the sender survives and
+// Moves the transferable balance minus the existential deposit, so the sender survives and
 // its nonce keeps counting: the right sweep for a deposit address.
 const sweepXt = signTransferAll(seed, {
   recipient: hd0.address,

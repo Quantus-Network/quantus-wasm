@@ -132,8 +132,8 @@ struct JsTransferParams {
 #[serde(rename_all = "camelCase")]
 struct JsTransferAllParams {
     recipient: String,
-    /// `true` leaves the existential deposit behind; `false` empties and reaps
-    /// the sender. Required.
+    /// `true` leaves the existential deposit behind; `false` lets the sender
+    /// be reaped. Required.
     keep_alive: bool,
     #[serde(flatten)]
     ctx: JsSignContext,
