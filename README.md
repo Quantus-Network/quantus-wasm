@@ -6,6 +6,7 @@ This package is **compiled to WebAssembly from the Quantus chain's own crypto cr
 
 - `account(seed, opts?)` → ML-DSA keypair → Poseidon `AccountId32` → SS58 address (prefix `189`).
 - `signTransfer(seed, params)` → a signed **v4 extrinsic**, ready for `author_submitExtrinsic`.
+- `signTransferAll(seed, params)` → sweep the whole transferable balance (`balances.transfer_all`).
 - `signCall(seed, call, params)` → sign **any** call (build it with polkadot.js, sign it here).
 - BIP39 mnemonic helpers using the canonical Quantus HD path.
 - Every function takes an optional `scheme`: `"ml-dsa-87"` (default) or `"ml-dsa-65"`.
@@ -56,7 +57,7 @@ const extrinsicHex =
 
 Two properties of the chain interact badly if a signer is careless, and this package's defaults are chosen around them:
 
-- **Reaping resets the nonce.** When an account's free balance drops below the existential deposit (0.001 QTC) the account is deleted, nonce included. The next deposit recreates it with nonce 0. Sign transfers with `keepAlive: true` (`balances.transfer_keep_alive`, which fails instead of reaping the sender) unless emptying the account is the intent; `keepAlive: false` is `transfer_allow_death`. The field has no default, so the choice is always explicit.
+- **Reaping resets the nonce.** When an account's free balance drops below the existential deposit (0.001 QTC) the account is deleted, nonce included. The next deposit recreates it with nonce 0. Sign transfers with `keepAlive: true` (`balances.transfer_keep_alive`, which fails instead of reaping the sender) unless emptying the account is the intent; `keepAlive: false` is `transfer_allow_death`. To sweep a deposit address, use `signTransferAll` with `keepAlive: true`: it moves the transferable balance minus the existential deposit, so the address survives and its nonce keeps counting. The field has no default, so the choice is always explicit.
 - **An immortal extrinsic never expires.** If the sender was reaped and re-funded, an immortal extrinsic signed earlier with nonce 0 is valid again, bytes unchanged, and anyone who saw it can resubmit it. Always sign **mortal** extrinsics: pass `period` (64 to 256 blocks is typical) plus the current best block's `blockNumber` and `blockHash`. Mortality bounds the replay window; keeping the account alive closes it.
 - **The block hash must come from the node.** Quantus hashes blocks with Poseidon. A hash computed client-side by a Blake2 codec, such as polkadot.js's `header.hash`, is a different value, and an extrinsic anchored to it fails signature verification (`BadProof`). Use `chain_getBlockHash` (`api.rpc.chain.getBlockHash()`), then `chain_getHeader(hash)` for the block number.
 - **Hedged signatures keep extrinsic hashes unique.** Without hedging, ML-DSA is deterministic: re-signing the same call with the same nonce after a reap would produce byte-identical extrinsics, and indexers that key on the extrinsic hash would see a duplicate. Every signature from this package mixes in 32 bytes of fresh platform randomness, so no two signed extrinsics are ever byte-identical. Note that hedging does not protect against replay of an *existing* extrinsic; only mortality and keep-alive do.
@@ -125,6 +126,21 @@ Notes:
 - **`blockHash` is the node's hash** (`chain_getBlockHash`), never one computed client-side such as polkadot.js's `header.hash`; see [Mortality, reaping and replay](#mortality-reaping-and-replay).
 - **Immortal** requires an explicit `period: 0`; omitting `period` also signs immortal but logs a one-time warning. See [Mortality, reaping and replay](#mortality-reaping-and-replay).
 - Hashes accept either `0x`-hex strings or raw `Uint8Array`. Amounts accept `bigint` (recommended), decimal strings, or safe integers.
+
+### `signTransferAll(seed: Uint8Array, params: TransferAllParams): Uint8Array`
+
+Builds and signs a `balances.transfer_all`, which moves the sender's whole transferable balance to `recipient`. The amount is decided on chain at execution time, so there is no `amount` field.
+
+```ts
+interface TransferAllParams {
+  scheme?: Scheme;      // signing key scheme; default "ml-dsa-87"
+  recipient: string | Uint8Array;
+  keepAlive: boolean;   // required: true leaves the existential deposit (sender survives); false also moves it and lets the sender be reaped
+  // ...plus the same chain context fields as TransferParams (nonce, period, blockNumber, blockHash, genesisHash, specVersion, transactionVersion, tip)
+}
+```
+
+`keepAlive: true` is the sweep for exchange deposit addresses: the address keeps 0.001 QTC, stays alive, and its nonce keeps counting. `keepAlive: false` also moves the existential deposit and allows the sender to be reaped. Reaping is not guaranteed: only the reducible balance moves, and locks, reserves or other references to the account keep it alive.
 
 ### `signCall(seed: Uint8Array, call: Call, params: CallParams): Uint8Array`
 
@@ -201,6 +217,10 @@ When `scheme` is given in both the options and the params, the options win: they
 ### `signTransferFromMnemonic(mnemonic, params, opts?): Uint8Array`
 
 Same as `signTransfer`, but keyed from a mnemonic at the given HD indices.
+
+### `signTransferAllFromMnemonic(mnemonic, params, opts?): Uint8Array`
+
+Same as `signTransferAll`, but keyed from a mnemonic at the given HD indices.
 
 ### `signCallFromMnemonic(mnemonic, call, params, opts?): Uint8Array`
 

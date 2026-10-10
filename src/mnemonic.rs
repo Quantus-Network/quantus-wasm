@@ -68,6 +68,22 @@ pub fn sign_transfer_from_mnemonic(
     ext::sign_transfer_with_keypair(&keypair, &params).map_err(crate::to_js_error)
 }
 
+/// Sign a `balances.transfer_all` from a mnemonic at the given HD indices.
+#[wasm_bindgen(js_name = signTransferAllFromMnemonic)]
+pub fn sign_transfer_all_from_mnemonic(
+    mnemonic: &str,
+    params: JsValue,
+    account: u32,
+    change: u32,
+    address_index: u32,
+    passphrase: Option<String>,
+) -> Result<Vec<u8>, JsError> {
+    let (params, scheme) = crate::build_transfer_all_params(params)?;
+    let keypair =
+        keypair_from_mnemonic(mnemonic, passphrase, account, change, address_index, scheme)?;
+    ext::sign_transfer_all_with_keypair(&keypair, &params).map_err(crate::to_js_error)
+}
+
 /// Sign an already-encoded `RuntimeCall` from a mnemonic at the given HD indices.
 #[wasm_bindgen(js_name = signCallFromMnemonic)]
 pub fn sign_call_from_mnemonic(

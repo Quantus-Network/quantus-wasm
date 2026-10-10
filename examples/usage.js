@@ -17,6 +17,7 @@
 const {
   account,
   signTransfer,
+  signTransferAll,
   signCall,
   accountFromMnemonic,
   signTransferFromMnemonic,
@@ -86,6 +87,17 @@ const allowDeathXt = signTransfer(seed, {
   ...ctx,
 });
 console.log("extrinsic:", preview(allowDeathXt, 6));
+
+console.log("\n== signTransferAll(seed, params) — sweep, keepAlive: true (transfer_all) ==");
+// Moves the transferable balance minus the existential deposit, so the sender survives and
+// its nonce keeps counting: the right sweep for a deposit address.
+const sweepXt = signTransferAll(seed, {
+  recipient: hd0.address,
+  keepAlive: true,
+  nonce: 0,
+  ...ctx,
+});
+console.log("extrinsic:", preview(sweepXt, 6));
 
 console.log("\n== signTransfer(seed, params) — assets transfer (assetId) ==");
 // The assets pallet is not currently on mainnet; this only encodes the call.

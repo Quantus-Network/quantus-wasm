@@ -3,9 +3,11 @@ const assert = require("node:assert/strict");
 const {
   account,
   signTransfer,
+  signTransferAll,
   signCall,
   accountFromMnemonic,
   signTransferFromMnemonic,
+  signTransferAllFromMnemonic,
   signCallFromMnemonic,
   mnemonicToSeed,
 } = require("../dist/index.js");
@@ -39,6 +41,9 @@ const callBytes = (xt, callLen) => hex(xt.subarray(xt.length - callLen));
 // pallet 2, call 3, 0x00 (Id), 32-byte account, compact(1000)=0xa10f.
 const KEEP_ALIVE_CALL = "0x020300" + CRYSTAL_ALICE_ACCOUNT_ID + "a10f";
 const ALLOW_DEATH_CALL = "0x020000" + CRYSTAL_ALICE_ACCOUNT_ID + "a10f";
+// balances.transfer_all(MultiAddress::Id(crystal_alice), keep_alive): pallet 2, call 4, then a bool.
+const TRANSFER_ALL_CALL = (keepAlive) =>
+  "020400" + CRYSTAL_ALICE_ACCOUNT_ID + (keepAlive ? "01" : "00");
 
 test("account matches the crystal_alice golden vector", () => {
   const a = account(CRYSTAL_ALICE_SEED);
@@ -171,6 +176,34 @@ test("keepAlive is required: true builds transfer_keep_alive, false transfer_all
     () => signTransferFromMnemonic(MNEMONIC, { ...params, keepAlive: undefined }),
     /keepAlive is required/
   );
+});
+
+test("signTransferAll builds transfer_all with the explicit keep_alive flag", () => {
+  const params = {
+    recipient: CRYSTAL_ALICE_ADDRESS,
+    nonce: 0,
+    period: 0,
+    genesisHash: "0x" + "00".repeat(32),
+    specVersion: 100,
+    transactionVersion: 1,
+  };
+  for (const keepAlive of [true, false]) {
+    const xt = signTransferAll(CRYSTAL_ALICE_SEED, { ...params, keepAlive });
+    assert.equal(xt.length, 7297 - 1); // one bool instead of compact(1000)
+    assert.equal(callBytes(xt, 36), TRANSFER_ALL_CALL(keepAlive));
+    const viaCall = signCall(CRYSTAL_ALICE_SEED, "0x" + TRANSFER_ALL_CALL(keepAlive), params);
+    assert.deepEqual(envelope(xt), envelope(viaCall));
+  }
+  assert.throws(() => signTransferAll(CRYSTAL_ALICE_SEED, params), /keepAlive is required/);
+  assert.throws(
+    () => signTransferAllFromMnemonic(MNEMONIC, { ...params, keepAlive: "true" }),
+    /keepAlive is required/
+  );
+
+  const fromMnemonic = signTransferAllFromMnemonic(MNEMONIC, { ...params, keepAlive: true }, { scheme: ML_DSA_65 });
+  assert.equal(fromMnemonic[2 + 1 + 33], 0x01);
+  assert.deepEqual(fromMnemonic.subarray(4, 36), accountFromMnemonic(MNEMONIC, { scheme: ML_DSA_65 }).accountId);
+  assert.equal(callBytes(fromMnemonic, 36), TRANSFER_ALL_CALL(true));
 });
 
 test("signCall matches signTransfer for the equivalent encoded call", () => {
